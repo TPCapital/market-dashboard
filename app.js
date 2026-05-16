@@ -9,7 +9,7 @@ const sourceCatalog = {
   xMacro: "Walter Bloomberg X / Kobeissi X",
   reddit: "WallStreetBets Reddit",
   finviz: "Finviz Heatmap",
-  unusualWhales: "Unusual Whales",
+  unusualWhales: "Options Flow Proxy",
   benzinga: "Benzinga"
 };
 
@@ -104,12 +104,10 @@ const fallback = {
     sector("能源", 41, -0.22, "油价催化不足，资金相对流出。")
   ],
   unusualWhales: [
-    optionFlow("NVDA", "Call Sweep", 2.8, "AI 芯片看涨资金回补，短线动能增强。"),
-    optionFlow("PLTR", "Call Buying", 2.1, "AI 软件方向看涨成交集中。"),
-    optionFlow("TSLA", "Put Hedge", 1.6, "高 beta 标的对冲需求抬升。"),
-    optionFlow("SPY", "0DTE Call", 1.4, "指数日内进攻仓位增加。"),
-    optionFlow("QQQ", "Call Spread", 1.2, "纳指 ETF 看涨价差活跃，科技主线仍有承接。"),
-    optionFlow("AMD", "Call Buying", 0.9, "半导体二线资金跟随，观察开盘扩散强度。")
+    optionFlow("NVDA", "AI 半导体", 88, "CALL MOMENTUM PROXY", "AI 半导体板块强势，价格动量和成交活跃度共振，短线看涨期权需求可能升温。", "风险：追高风险中等，等待回踩更优。"),
+    optionFlow("PLTR", "AI 软件", 81, "CALL MOMENTUM PROXY", "AI 软件主线延续，散户关注度和价格动量同步增强。", "风险：若开盘冲高回落，避免追单。"),
+    optionFlow("TSLA", "高 beta 科技", 66, "WATCHLIST ONLY", "散户关注度高，但价格确认不足，适合观察不适合重仓追高。", "风险：需等待开盘量价确认。"),
+    optionFlow("UNH", "医疗", 72, "PUT / HEDGE PROXY", "防御板块承压，价格走弱，短线对冲需求可能上升。", "风险：若开盘快速修复，空头对冲可能失效。")
   ],
   benzinga: {
     movers: [
@@ -156,8 +154,8 @@ function sector(name, score, change, summary) {
   return { sector: name, score, change, summary };
 }
 
-function optionFlow(symbol, type, premium, summary) {
-  return { symbol, type, premium, summary };
+function optionFlow(symbol, sectorName, score, direction, summary, risk) {
+  return { symbol, sector: sectorName, score, direction, type: direction, summary, risk };
 }
 
 function mover(symbol, change, reason, bias) {
@@ -343,15 +341,15 @@ async function loadServerSnapshot() {
   const json = await fetchJson(`${url}${joiner}ts=${Date.now()}`);
   const sources = fallbackSources();
   for (const [key, value] of Object.entries(json.sources || {})) {
-    if (!sources[key] || !["live", "cached"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
+    if (!sources[key] || !["live", "proxy", "cached"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
     const updatedAt = Number(value.updatedAt || json.generatedAt || Date.now());
-    const status = json.servedFrom === "last-success" || value.status === "cached" ? "cached" : "live";
+    const status = json.servedFrom === "last-success" || value.status === "cached" ? "cached" : value.status;
     sources[key] = {
       data: value.data,
       status,
       label: value.label || sourceCatalog[key],
       updatedAt,
-      timestamp: status === "live" ? formatClock(updatedAt) : `最后成功 ${formatDateTime(updatedAt)}`
+      timestamp: ["live", "proxy"].includes(status) ? formatClock(updatedAt) : `最后成功 ${formatDateTime(updatedAt)}`
     };
     writeSourceCache(key, value.data, updatedAt);
   }
@@ -493,12 +491,14 @@ function buildDashboard(sources) {
 function sourceModeLabel(sources) {
   const statuses = Object.values(sources).map((source) => source?.status).filter(Boolean);
   if (statuses.some((status) => status === "live")) return "Live + stored intelligence";
+  if (statuses.some((status) => status === "proxy")) return "Proxy intelligence";
   if (statuses.some((status) => status === "cached")) return "Last successful intelligence";
   return "Fallback snapshot intelligence";
 }
 
 function dataBasisLabel(item) {
   if (item.status === "live") return `资金流基于 LIVE 数据 ${item.timestamp}`;
+  if (item.status === "proxy") return `资金流基于 PROXY 数据 ${item.timestamp}`;
   if (item.status === "cached") return `资金流基于最后成功数据 ${item.timestamp}`;
   return `资金流基于${FALLBACK_SNAPSHOT_LABEL}`;
 }
@@ -522,14 +522,23 @@ function formatDateTime(value) {
 
 function statusGroup(sourceItems) {
   const liveItems = sourceItems.filter((source) => source?.status === "live" && source.updatedAt);
+  const proxyItems = sourceItems.filter((source) => source?.status === "proxy" && source.updatedAt);
   const cachedItems = sourceItems.filter((source) => source?.status === "cached" && source.updatedAt);
   const latestLiveAt = liveItems.length ? Math.max(...liveItems.map((source) => source.updatedAt)) : null;
+  const latestProxyAt = proxyItems.length ? Math.max(...proxyItems.map((source) => source.updatedAt)) : null;
   const latestCachedAt = cachedItems.length ? Math.max(...cachedItems.map((source) => source.updatedAt)) : null;
   if (latestLiveAt) {
     return {
       status: "live",
       timestamp: formatClock(latestLiveAt),
       fullTimestamp: formatDateTime(latestLiveAt)
+    };
+  }
+  if (latestProxyAt) {
+    return {
+      status: "proxy",
+      timestamp: formatClock(latestProxyAt),
+      fullTimestamp: formatDateTime(latestProxyAt)
     };
   }
   if (latestCachedAt) {
@@ -597,13 +606,67 @@ function normalizeStars(items, quoteMap) {
 }
 
 function normalizeNews(items) {
-  return items.map((item, index) => ({
-    category: item.category || "新闻",
-    title: item.title,
-    summary: item.summary || item.reason,
-    bias: item.bias || "中性",
-    time: item.time || item.publishedAt || `0${7 - Math.min(index, 5)}:${(50 - index * 7).toString().padStart(2, "0")}`
-  }));
+  return items.map((item, index) => {
+    const translated = translateNewsTitle(item.title);
+    return {
+      category: item.category || "新闻",
+      title: translated.title,
+      originalTitle: item.title,
+      showOriginal: translated.showOriginal,
+      summary: item.summary || item.reason,
+      bias: classifyNewsBias(item.title, item.bias),
+      time: item.time || item.publishedAt || `0${7 - Math.min(index, 5)}:${(50 - index * 7).toString().padStart(2, "0")}`
+    };
+  });
+}
+
+function translateNewsTitle(title = "") {
+  const original = String(title || "").trim();
+  if (!original) return { title: "市场新闻", showOriginal: false };
+  const dictionary = [
+    [/Patriot Missiles/gi, "爱国者导弹"],
+    [/S&P 500/gi, "标普500"],
+    [/fund managers/gi, "基金经理"],
+    [/space stock/gi, "太空概念股"],
+    [/war fallout/gi, "战争外溢影响"],
+    [/worth your money/gi, "是否值得买"],
+    [/right now/gi, "现在"],
+    [/face-off/gi, "对比"],
+    [/professional/gi, "专业"],
+    [/lose to/gi, "跑输"],
+    [/works/gi, "有效"],
+    [/missiles?/gi, "导弹"],
+    [/stocks?/gi, "股票"],
+    [/market/gi, "市场"],
+    [/strategy/gi, "策略"],
+    [/rocket/gi, "火箭"],
+    [/needs/gi, "需要"],
+    [/Iran/gi, "伊朗"],
+    [/Qatar/gi, "卡塔尔"]
+  ];
+  let translated = original;
+  for (const [pattern, replacement] of dictionary) {
+    translated = translated.replace(pattern, replacement);
+  }
+  const lower = original.toLowerCase();
+  const prefix = classifyNewsBias(original) === "利好" ? "利好：" : classifyNewsBias(original) === "利空" ? "利空：" : "中性：";
+  if (translated !== original) return { title: `${prefix}${translated}`, showOriginal: true };
+  if (/upgrade|buy rating|price target/.test(lower)) return { title: "利好：分析师评级或目标价上修", showOriginal: true };
+  if (/downgrade|cut|warning|loss|lawsuit|investigation/.test(lower)) return { title: "利空：评级下修或风险事件", showOriginal: true };
+  if (/earnings|revenue|guidance/.test(lower)) return { title: "财报：业绩与指引更新", showOriginal: true };
+  if (/\bai\b|chip|semiconductor|nvidia/.test(lower)) return { title: "AI：半导体与人工智能主线更新", showOriginal: true };
+  return { title: `${prefix}市场动态更新`, showOriginal: true };
+}
+
+function classifyNewsBias(title = "", fallbackBias = "中性") {
+  const lower = String(title || "").toLowerCase();
+  const bullish = /(beat|raise|upgrade|partnership|contract|\bai\b|launch|demand|growth|guidance raise|buy rating)/.test(lower);
+  const bearish = /(miss|cut|downgrade|lawsuit|investigation|war|tariff|delay|weak demand|warning|loss)/.test(lower);
+  const neutral = /(strategy|comparison|analysis|outlook|worth|fund managers)/.test(lower);
+  if (bullish && !bearish) return "利好";
+  if (bearish && !bullish) return "利空";
+  if (neutral) return "中性";
+  return ["利好", "利空", "中性"].includes(fallbackBias) ? fallbackBias : "中性";
 }
 
 function marketSummary(indices) {
@@ -750,21 +813,26 @@ function renderModuleStatus(statusMap) {
       const node = document.querySelector(selector);
       if (!node) return;
       node.classList.toggle("module-live", item.status === "live");
+      node.classList.toggle("module-proxy", item.status === "proxy");
       node.classList.toggle("module-cached", item.status === "cached");
       node.classList.toggle("module-fallback", item.status === "fallback");
-      node.textContent = `${statusLabel(item.status)} · ${item.timestamp}`;
+      node.textContent = `${statusLabel(item.status, key)} · ${item.timestamp}`;
     });
   }
 }
 
-function statusLabel(status) {
-  return status === "live" ? "LIVE" : status === "cached" ? "LAST" : "FALLBACK";
+function statusLabel(status, key = "") {
+  if (key === "options" && status === "live") return "LIVE OPTIONS FLOW";
+  if (status === "live") return "LIVE";
+  if (status === "proxy") return "PROXY";
+  if (status === "cached") return "LAST";
+  return "FALLBACK";
 }
 
 function renderSources(items) {
   html("#sourceGrid", items.map((item) => `
     <article class="source-card">
-      <span class="source-state ${item.status}">${statusLabel(item.status)}</span>
+      <span class="source-state ${item.status}">${statusLabel(item.status, item.key)}</span>
       <strong>${escapeHtml(item.label)}</strong>
       <p>${sourceRole(item.key)} · ${escapeHtml(item.timestamp)}</p>
     </article>
@@ -778,7 +846,7 @@ function sourceRole(key) {
     xMacro: "宏观快讯，不参与个股新闻。",
     reddit: "散户情绪，只读取 WSB。",
     finviz: "热钱板块：Finviz 适配器或 Yahoo 板块代理。",
-    unusualWhales: "期权资金流：真实适配器或动量代理。",
+    unusualWhales: "期权流代理信号：免费数据推断方向。",
     benzinga: "异动新闻：Benzinga 适配器或 Yahoo 新闻代理。"
   }[key];
 }
@@ -844,10 +912,12 @@ function renderRetail(retail) {
 
 function renderOptions(items) {
   html("#optionsFlow", items.map((item) => `
-    <div class="feed-item">
-      <div class="row-head"><span>${escapeHtml(item.symbol)}</span><span>${escapeHtml(item.type)}</span></div>
-      <strong>$${Number(item.premium).toFixed(1)}M premium</strong>
+    <div class="feed-item option-proxy-card">
+      <div class="row-head"><span>${escapeHtml(item.symbol)}</span><span>${escapeHtml(item.sector || "其他")}</span></div>
+      <div class="option-score">Flow Proxy Score ${Math.round(Number(item.score || 0))}</div>
+      <strong class="option-direction">${escapeHtml(item.direction || item.type || "WATCHLIST ONLY")}</strong>
       <p>${escapeHtml(item.summary)}</p>
+      <small>${escapeHtml(item.risk || "风险：需等待开盘量价确认。")}</small>
     </div>
   `).join(""));
 }
@@ -897,6 +967,7 @@ function renderNews(items) {
         <summary>
           <span class="news-head"><span class="tag">${escapeHtml(item.category)}</span><span class="${item.bias === "利空" ? "down" : item.bias === "利好" ? "up" : "flat"}">${escapeHtml(item.bias)} · ${escapeHtml(item.time)}</span></span>
           <strong>${escapeHtml(item.title)}</strong>
+          ${item.showOriginal ? `<em class="news-original">${escapeHtml(item.originalTitle)}</em>` : ""}
         </summary>
         <p>${escapeHtml(item.summary)}</p>
       </details>

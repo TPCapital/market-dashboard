@@ -6,7 +6,7 @@ const sourceCatalog = {
   xMacro: "Macro Feed",
   reddit: "WallStreetBets Reddit",
   finviz: "Yahoo Sector Proxy",
-  unusualWhales: "Options Flow Adapter",
+  unusualWhales: "Options Flow Proxy",
   benzinga: "Yahoo News / Movers Proxy"
 };
 
@@ -79,17 +79,17 @@ function metric(id, name, value, change, note) {
   return { id, name, value, change, note };
 }
 
-function quote(symbol, price, preMarketChange, volumeRatio = 1) {
+function quote(symbol, price, preMarketChange, volumeRatio = 1, extra = {}) {
   const [name, sector] = symbolMeta[symbol] || [symbol, "其他"];
-  return { symbol, name, sector, price, preMarketChange, volumeRatio };
+  return { symbol, name, sector, price, preMarketChange, volumeRatio, ...extra };
 }
 
 function nowIso(value) {
   return new Date(value).toISOString();
 }
 
-function liveSource(key, data, generatedAt, label = sourceCatalog[key]) {
-  return { data, status: "live", label, updatedAt: generatedAt, timestamp: nowIso(generatedAt) };
+function liveSource(key, data, generatedAt, label = sourceCatalog[key], status = "live") {
+  return { data, status, label, updatedAt: generatedAt, timestamp: nowIso(generatedAt) };
 }
 
 function cachedSource(key, cached) {
@@ -101,7 +101,7 @@ function fallbackSource(key, data = null) {
 }
 
 function keepLastGood(key, source) {
-  if (source.status === "live" && source.data) lastGoodSources[key] = source;
+  if (["live", "proxy"].includes(source.status) && source.data) lastGoodSources[key] = source;
   return source;
 }
 
@@ -159,7 +159,13 @@ async function loadYahoo(symbols) {
       row?.preMarketChangePercent ?? row?.regularMarketChangePercent ?? 0,
       row?.regularMarketVolume && row?.averageDailyVolume3Month
         ? row.regularMarketVolume / row.averageDailyVolume3Month
-        : 1
+        : 1,
+      {
+        regularMarketChangePercent: row?.regularMarketChangePercent ?? 0,
+        preMarketChangePercent: row?.preMarketChangePercent ?? row?.regularMarketChangePercent ?? 0,
+        volume: row?.regularMarketVolume ?? 0,
+        averageVolume: row?.averageDailyVolume3Month ?? 0
+      }
     );
   }).filter((item) => item.price > 0);
 
@@ -213,7 +219,13 @@ async function loadStooq(symbols) {
       row?.regularMarketChangePercent ?? 0,
       row?.regularMarketVolume && row?.averageDailyVolume3Month
         ? row.regularMarketVolume / row.averageDailyVolume3Month
-        : 1
+        : 1,
+      {
+        regularMarketChangePercent: row?.regularMarketChangePercent ?? 0,
+        preMarketChangePercent: row?.regularMarketChangePercent ?? 0,
+        volume: row?.regularMarketVolume ?? 0,
+        averageVolume: row?.averageDailyVolume3Month ?? 0
+      }
     );
   }).filter((item) => item.price > 0);
 
@@ -250,6 +262,10 @@ async function loadTradingView() {
       symbol,
       score,
       sector,
+      change: change || 0,
+      volume: volume || 0,
+      rsi: rsi || 50,
+      recommendation: recommendation || 0,
       logic: `TradingView 动量 ${Number(change || 0).toFixed(2)}%，RSI ${Number(rsi || 0).toFixed(1)}，量能 ${Number(volume || 0).toLocaleString("en-US")}。`
     };
   }).filter((item) => item.symbol);
@@ -331,8 +347,8 @@ function classifyNews(title) {
 
 function classifyBias(title) {
   const lower = title.toLowerCase();
-  if (/(beat|surge|jump|upgrade|record|rally|bull)/.test(lower)) return "利好";
-  if (/(miss|fall|drop|downgrade|risk|probe|bear)/.test(lower)) return "利空";
+  if (/(beat|raise|upgrade|partnership|contract|\bai\b|launch|demand|growth|guidance raise|buy rating|surge|jump|record|rally|bull)/.test(lower)) return "利好";
+  if (/(miss|cut|downgrade|lawsuit|investigation|war|tariff|delay|weak demand|warning|loss|fall|drop|probe|bear)/.test(lower)) return "利空";
   return "中性";
 }
 
@@ -366,13 +382,116 @@ function deriveMovers(quotes, news = []) {
   }));
 }
 
-function deriveOptionsProxy(quotes) {
-  return [...(quotes || [])].sort((a, b) => Math.abs(b.preMarketChange) - Math.abs(a.preMarketChange)).slice(0, 6).map((item) => ({
-    symbol: item.symbol,
-    type: item.preMarketChange >= 0 ? "Momentum Proxy" : "Hedge Proxy",
-    premium: Math.max(0.3, Math.abs(item.preMarketChange || 0) / 2),
-    summary: "免费版未接入真实期权流，当前为价格动量代理，需以 Unusual Whales API 替换。"
-  }));
+function deriveOptionsProxy(quotes, context = {}) {
+  return [...(quotes || [])]
+    .map((stock) => calculateOptionsProxyScore(stock, context))
+    .filter((item) => item.direction !== "IGNORE" || item.score >= 45)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+}
+
+function calculateOptionsProxyScore(stock, context = {}) {
+  const sectorMap = new Map((context.sectors || []).map((item) => [item.sector, item]));
+  const tvMap = new Map((context.tradingView || []).map((item) => [item.symbol, item]));
+  const mentionMap = new Map(context.reddit?.mentions || []);
+  const newsText = (context.news || []).map((item) => `${item.title || ""} ${item.summary || ""}`).join(" ").toLowerCase();
+  const stockNews = newsText.includes(stock.symbol.toLowerCase()) ? newsText : "";
+  const sector = stock.sector || "其他";
+  const sectorHeat = sectorMap.get(sector)?.score ?? sectorThemeScore(sector);
+  const tv = tvMap.get(stock.symbol);
+  const preChange = Number(stock.preMarketChangePercent ?? stock.preMarketChange ?? 0);
+  const dayChange = Number(stock.regularMarketChangePercent ?? tv?.change ?? preChange);
+  const volumeRatio = Number(stock.volumeRatio || (stock.volume && stock.averageVolume ? stock.volume / stock.averageVolume : 1));
+  const mentions = Number(mentionMap.get(stock.symbol) || 0);
+
+  const momentumRaw = preChange >= 0
+    ? Math.max(preChange / 4, dayChange / 3)
+    : Math.max(Math.abs(preChange) / 3.5, Math.abs(dayChange) / 3);
+  const momentumScore = clamp01(momentumRaw) * 25;
+  const volumeScore = clamp01((volumeRatio - 0.8) / 2.2) * 20;
+  const sectorScore = clamp01(sectorHeat / 100) * 20;
+  const catalystScore = newsCatalystScore(stockNews || newsText, stock.symbol) * 20;
+  const retailScore = clamp01(mentions / 18) * 15;
+  const total = Math.round(Math.min(100, momentumScore + volumeScore + sectorScore + catalystScore + retailScore));
+  const bearish = preChange < -0.75 || dayChange < -1.2 || newsBearish(stockNews);
+  const bullish = preChange > 0.5 || dayChange > 0.8;
+  const direction = classifyOptionsProxyDirection(total, bullish, bearish, sectorHeat);
+  const risk = proxyRiskLabel(total, mentions, preChange, direction);
+
+  return {
+    symbol: stock.symbol,
+    name: stock.name,
+    sector,
+    score: total,
+    direction,
+    type: direction,
+    summary: proxySummary(stock, direction, sectorHeat, volumeRatio, mentions),
+    risk,
+    components: {
+      priceMomentum: Math.round(momentumScore),
+      volumeExpansion: Math.round(volumeScore),
+      sectorHeat: Math.round(sectorScore),
+      newsCatalyst: Math.round(catalystScore),
+      retailAttention: Math.round(retailScore)
+    }
+  };
+}
+
+function sectorThemeScore(sector) {
+  if (/AI 半导体|AI 软件|AI 服务器|云计算|加密资产|大型科技|网络安全/.test(sector)) return 78;
+  if (/国防|军工/.test(sector)) return 66;
+  if (/能源|医疗|金融/.test(sector)) return 48;
+  return 56;
+}
+
+function newsCatalystScore(text, symbol) {
+  const scoped = text.includes(symbol.toLowerCase()) ? text : text.slice(0, 1200);
+  const bullish = /(beat|raise|upgrade|partnership|contract|\bai\b|launch|demand|growth|guidance raise|buy rating|order|product)/i.test(scoped);
+  const bearish = /(miss|cut|downgrade|lawsuit|investigation|war|tariff|delay|weak demand|warning|loss|probe)/i.test(scoped);
+  if (bullish && !bearish) return 0.9;
+  if (bearish && !bullish) return 0.28;
+  if (bullish && bearish) return 0.55;
+  return 0.45;
+}
+
+function newsBearish(text) {
+  return /(miss|cut|downgrade|lawsuit|investigation|war|tariff|delay|weak demand|warning|loss|probe)/i.test(text);
+}
+
+function classifyOptionsProxyDirection(score, bullish, bearish, sectorHeat) {
+  if (score >= 70 && bullish && !bearish && sectorHeat >= 55) return "CALL MOMENTUM PROXY";
+  if ((score >= 62 && bearish) || (bearish && sectorHeat < 50)) return "PUT / HEDGE PROXY";
+  if (score >= 50) return "WATCHLIST ONLY";
+  return "IGNORE";
+}
+
+function proxyRiskLabel(score, mentions, preChange, direction) {
+  if (direction === "IGNORE") return "风险：信号不足，暂不纳入交易。";
+  if (mentions >= 12 && preChange >= 3) return "风险：散户拥挤且涨幅较大，避免开盘追单。";
+  if (score >= 82 && preChange >= 2) return "风险：追高风险中等，等待回踩更优。";
+  if (direction.includes("HEDGE")) return "风险：若开盘快速修复，空头对冲可能失效。";
+  return "风险：需等待开盘量价确认。";
+}
+
+function proxySummary(stock, direction, sectorHeat, volumeRatio, mentions) {
+  const sector = stock.sector || "该板块";
+  if (direction === "CALL MOMENTUM PROXY") {
+    return `${sector}热度较强，价格动量与量能扩张共振，短线看涨期权需求可能升温。`;
+  }
+  if (direction === "PUT / HEDGE PROXY") {
+    return `${sector}承压或价格走弱，短线保护性对冲需求可能上升。`;
+  }
+  if (mentions >= 8) {
+    return `散户关注度较高，但价格与板块确认不足，适合观察不适合重仓追高。`;
+  }
+  if (volumeRatio >= 1.5 || sectorHeat >= 65) {
+    return `${sector}有一定热度，但方向信号尚未充分确认。`;
+  }
+  return `价格、板块与新闻催化未形成清晰共振。`;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
 
 export async function buildSnapshot(req) {
@@ -389,7 +508,12 @@ export async function buildSnapshot(req) {
   const news = newsSource.data || [];
   const sectorData = quotes.length ? deriveSectors(quotes) : [];
   const moverData = quotes.length ? deriveMovers(quotes, news) : [];
-  const optionProxyData = quotes.length ? deriveOptionsProxy(quotes) : [];
+  const optionProxyData = quotes.length ? deriveOptionsProxy(quotes, {
+    sectors: sectorData,
+    tradingView: tradingView.data || [],
+    reddit: reddit.data || {},
+    news
+  }) : [];
   const finviz = sectorData.length
     ? keepLastGood("finviz", liveSource("finviz", sectorData, generatedAt, "Yahoo Sector Proxy"))
     : lastOrFallback("finviz");
@@ -397,7 +521,7 @@ export async function buildSnapshot(req) {
     ? keepLastGood("benzinga", liveSource("benzinga", { movers: moverData, news }, generatedAt, newsSource.label || "Yahoo News / Movers Proxy"))
     : lastOrFallback("benzinga");
   const unusualWhales = optionProxyData.length
-    ? keepLastGood("unusualWhales", liveSource("unusualWhales", optionProxyData, generatedAt, "Momentum Options Proxy"))
+    ? keepLastGood("unusualWhales", liveSource("unusualWhales", optionProxyData, generatedAt, "Options Flow Proxy", "proxy"))
     : lastOrFallback("unusualWhales");
 
   const snapshot = {
