@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 美股信息流交易系统</title>
+    <link rel="preconnect" href="https://query1.finance.yahoo.com" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="terminal">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AI US EQUITY FLOW TERMINAL</p>
+          <h1>AI 美股信息流交易系统</h1>
+        </div>
+        <div class="meta">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="dataStatus">Initializing</span>
+          <time id="asOf">--</time>
+          <span id="refreshTimer">--</span>
+        </div>
+      </header>
+
+      <section class="hero-grid">
+        <article class="regime-panel">
+          <p class="panel-label">Risk Regime</p>
+          <div class="regime-row">
+            <span id="riskMode" class="risk-mode">--</span>
+            <span id="riskScore" class="risk-score">0</span>
+          </div>
+          <p id="riskConclusion" class="conclusion">等待行情刷新。</p>
+          <div class="gauge">
+            <span id="gaugeFill"></span>
+          </div>
+          <div id="riskInputs" class="factor-strip"></div>
+        </article>
+
+        <article class="strategy-panel">
+          <p class="panel-label">今日策略</p>
+          <h2 id="strategyText">谨慎追高，等待回踩确认</h2>
+          <p id="strategyContext">指数与波动率信号尚待确认。</p>
+        </article>
+      </section>
+
+      <section class="workspace-grid">
+        <div class="primary-column">
+          <section class="section focus-panel">
+            <div class="section-title">
+              <h2>强势股自动筛选</h2>
+              <span id="riskModuleMeta">FALLBACK · --</span>
+            </div>
+            <aside class="tape-card">
+              <p class="panel-label">Stock Pool Logic</p>
+              <h3 id="starSummary">强势股自动筛选</h3>
+              <p>按涨幅、相对强弱、成交活跃度、板块热度与催化可信度加权。</p>
+            </aside>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h2>明星股池</h2>
+              <span id="starModuleMeta">FALLBACK · --</span>
+            </div>
+            <div id="starGrid" class="star-grid loading-zone is-loading"></div>
+          </section>
+
+          <section class="section command-main">
+            <div class="section-title">
+              <h2>盘前异动榜</h2>
+              <span id="moverModuleMeta">FALLBACK · --</span>
+            </div>
+            <div id="moverTable" class="data-table loading-zone is-loading"></div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h2>热钱板块</h2>
+              <span id="flowModuleMeta">FALLBACK · --</span>
+            </div>
+            <aside class="tape-card flow-summary-card">
+              <p class="panel-label">AI Tape Read</p>
+              <h3 id="tapeRead">等待扫描</h3>
+              <p id="tapeReason">正在读取热钱板块、异动扩散与期权方向。</p>
+            </aside>
+            <div id="flowGrid" class="flow-grid loading-zone is-loading"></div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h2>期权资金流</h2>
+              <span id="optionsModuleMeta">FALLBACK · --</span>
+            </div>
+            <div id="optionsFlow" class="options-grid loading-zone is-loading"></div>
+          </section>
+        </div>
+
+        <aside class="secondary-column">
+          <section class="section market-strip">
+            <div class="section-title">
+              <h2>市场指数</h2>
+              <span id="indexModuleMeta">FALLBACK · --</span>
+            </div>
+            <div id="indexGrid" class="card-grid six loading-zone is-loading"></div>
+            <article class="market-summary-card">
+              <p class="panel-label">Market Summary</p>
+              <h3 id="marketSummary">等待指数刷新。</h3>
+            </article>
+          </section>
+
+          <section class="section split compact-split">
+            <div>
+              <div class="section-title">
+                <h2>市场情绪</h2>
+                <span id="sentimentModuleMeta">FALLBACK · --</span>
+              </div>
+              <div id="sentimentGrid" class="card-grid three loading-zone is-loading"></div>
+            </div>
+            <aside class="verdict-card">
+              <p class="panel-label">追高判断</p>
+              <h3 id="chaseVerdict">中性偏谨慎</h3>
+              <p id="chaseReason">Greed 未到极端，但科技拥挤度需要观察。</p>
+            </aside>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h2>利好 / 利空新闻</h2>
+              <span id="newsModuleMeta">FALLBACK · --</span>
+            </div>
+            <div id="newsGrid" class="news-grid loading-zone is-loading"></div>
+          </section>
+
+          <section class="section intel-grid">
+            <article class="intel-panel">
+              <div class="section-title compact">
+                <h2>宏观快讯</h2>
+                <span id="macroModuleMeta">FALLBACK · --</span>
+              </div>
+              <div id="macroFeed" class="feed-list loading-zone is-loading"></div>
+            </article>
+
+            <article class="intel-panel">
+              <div class="section-title compact">
+                <h2>散户情绪 / 恐慌指数</h2>
+                <span id="retailModuleMeta">FALLBACK · --</span>
+              </div>
+              <div id="retailPanel" class="loading-zone is-loading"></div>
+            </article>
+          </section>
+        </aside>
+      </section>
+
+      <section class="section source-section">
+        <div class="section-title compact">
+          <h2>数据源状态</h2>
+          <span id="sourceModuleMeta">FALLBACK · --</span>
+        </div>
+        <div id="sourceGrid" class="source-grid loading-zone is-loading"></div>
+      </section>
+
+    </main>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

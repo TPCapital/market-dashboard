@@ -1,0 +1,51 @@
+window.DASHBOARD_CONFIG = {
+  refreshSeconds: 180,
+
+  // Optional deployment endpoints. Leave empty for static fallback mode.
+  // Each endpoint must return JSON for its own module only; the app will not
+  // use one source to synthesize another source's content.
+  endpoints: {
+    snapshot: "/api/snapshot",
+    yahoo: "/api/yahoo",
+    reddit: "/api/reddit",
+    xMacro: "/api/x-macro",
+    finvizHeatmap: "/api/finviz-heatmap",
+    unusualWhales: "/api/unusual-whales",
+    benzinga: "/api/benzinga",
+    tradingViewScreener: "/api/tradingview-screener"
+  },
+
+  yahooSymbols: [
+    "SPY",
+    "QQQ",
+    "^GSPC",
+    "^NDX",
+    "^VIX",
+    "^TNX",
+    "GC=F",
+    "DX-Y.NYB",
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "MRVL",
+    "SMCI",
+    "MSFT",
+    "AAPL",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "PLTR",
+    "ORCL",
+    "CRWD",
+    "PANW",
+    "COIN",
+    "MSTR",
+    "XOM",
+    "CVX",
+    "JPM",
+    "LLY",
+    "DASH",
+    "CSCO"
+  ]
+};
