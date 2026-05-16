@@ -51,139 +51,135 @@
         <span id="openingBias">Opening Bias --</span>
       </section>
 
-      <section class="workspace-grid">
-        <div class="primary-column">
-          <section class="section focus-panel">
+      <section class="terminal-stack">
+        <section class="section market-strip">
+          <div class="section-title">
+            <h2>市场指数</h2>
+            <span id="indexModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <div id="indexGrid" class="card-grid six loading-zone is-loading"></div>
+          <article class="market-summary-card">
+            <p class="panel-label">Market Summary</p>
+            <h3 id="marketSummary">等待指数刷新。</h3>
+          </article>
+        </section>
+
+        <section class="section split compact-split">
+          <div>
             <div class="section-title">
-              <h2>强势股自动筛选</h2>
-              <span id="riskModuleMeta">FALLBACK · --</span>
+              <h2>Risk Metrics</h2>
+              <span id="sentimentModuleMeta">SNAPSHOT · --</span>
             </div>
-            <aside class="tape-card">
-              <p class="panel-label">Stock Pool Logic</p>
-              <h3 id="starSummary">强势股自动筛选</h3>
-              <p>按涨幅、相对强弱、成交活跃度、板块热度与催化可信度加权。</p>
-            </aside>
-          </section>
+            <div id="sentimentGrid" class="card-grid three loading-zone is-loading"></div>
+          </div>
+          <aside class="verdict-card">
+            <p class="panel-label">追高判断</p>
+            <h3 id="chaseVerdict">中性偏谨慎</h3>
+            <p id="chaseReason">Greed 未到极端，但科技拥挤度需要观察。</p>
+          </aside>
+        </section>
 
-          <section class="section">
-            <div class="section-title">
-              <h2>今日机会榜 <small>PREMARKET OPPORTUNITY SCANNER</small></h2>
-              <span id="opportunityModuleMeta">WATCH · --</span>
+        <section class="section">
+          <div class="section-title">
+            <h2>Premarket Trade Plan</h2>
+            <span id="tradePlanModuleMeta">WATCH · --</span>
+          </div>
+          <article class="trade-plan-card">
+            <h3 id="tradePlanTitle">等待机会扫描。</h3>
+            <p id="tradePlanBody">数据刷新后生成盘前交易计划。</p>
+            <div id="tradePlanList" class="plan-list"></div>
+          </article>
+        </section>
+
+        <section class="section focus-panel">
+          <div class="section-title">
+            <h2>强势股自动筛选</h2>
+            <span id="riskModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <aside class="tape-card">
+            <p class="panel-label">Stock Pool Logic</p>
+            <h3 id="starSummary">强势股自动筛选</h3>
+            <p>按涨幅、相对强弱、成交活跃度、板块热度与催化可信度加权。</p>
+          </aside>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <h2>今日机会榜 <small>PREMARKET OPPORTUNITY SCANNER</small></h2>
+            <span id="opportunityModuleMeta">WATCH · --</span>
+          </div>
+          <div id="opportunityGrid" class="opportunity-grid loading-zone is-loading"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <h2>明星股池</h2>
+            <span id="starModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <div id="starGrid" class="star-grid loading-zone is-loading"></div>
+        </section>
+
+        <section class="section command-main">
+          <div class="section-title">
+            <h2>盘前异动榜</h2>
+            <span id="moverModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <div id="moverTable" class="data-table loading-zone is-loading"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <h2>热钱板块</h2>
+            <span id="flowModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <aside class="tape-card flow-summary-card">
+            <p class="panel-label">AI Tape Read</p>
+            <h3 id="tapeRead">等待扫描</h3>
+            <p id="tapeReason">正在读取热钱板块、异动扩散与期权方向。</p>
+          </aside>
+          <div id="flowGrid" class="flow-grid loading-zone is-loading"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <h2>AI 期权流代理 <small>OPTIONS FLOW PROXY</small></h2>
+            <span id="optionsModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <div id="optionsFlow" class="options-grid loading-zone is-loading"></div>
+          <p class="module-footnote">免费版未接入真实期权大单流，本模块基于热度、成交量、板块热度、新闻情绪、相对强弱、盘前涨跌与散户关注生成 PROXY 信号。</p>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <h2>利好 / 利空新闻</h2>
+            <span id="newsModuleMeta">SNAPSHOT · --</span>
+          </div>
+          <div id="newsGrid" class="news-grid loading-zone is-loading"></div>
+        </section>
+
+        <section class="section intel-grid">
+          <article class="intel-panel">
+            <div class="section-title compact">
+              <h2>宏观快讯</h2>
+              <span id="macroModuleMeta">SNAPSHOT · --</span>
             </div>
-            <div id="opportunityGrid" class="opportunity-grid loading-zone is-loading"></div>
-          </section>
+            <div id="macroFeed" class="feed-list loading-zone is-loading"></div>
+          </article>
 
-          <section class="section">
-            <div class="section-title">
-              <h2>明星股池</h2>
-              <span id="starModuleMeta">FALLBACK · --</span>
+          <article class="intel-panel">
+            <div class="section-title compact">
+              <h2>散户情绪 / 恐慌指数</h2>
+              <span id="retailModuleMeta">SNAPSHOT · --</span>
             </div>
-            <div id="starGrid" class="star-grid loading-zone is-loading"></div>
-          </section>
-
-          <section class="section command-main">
-            <div class="section-title">
-              <h2>盘前异动榜</h2>
-              <span id="moverModuleMeta">FALLBACK · --</span>
-            </div>
-            <div id="moverTable" class="data-table loading-zone is-loading"></div>
-          </section>
-
-          <section class="section">
-            <div class="section-title">
-              <h2>热钱板块</h2>
-              <span id="flowModuleMeta">FALLBACK · --</span>
-            </div>
-            <aside class="tape-card flow-summary-card">
-              <p class="panel-label">AI Tape Read</p>
-              <h3 id="tapeRead">等待扫描</h3>
-              <p id="tapeReason">正在读取热钱板块、异动扩散与期权方向。</p>
-            </aside>
-            <div id="flowGrid" class="flow-grid loading-zone is-loading"></div>
-          </section>
-
-          <section class="section">
-            <div class="section-title">
-              <h2>期权流代理信号 <small>OPTIONS FLOW PROXY</small></h2>
-              <span id="optionsModuleMeta">FALLBACK · --</span>
-            </div>
-            <div id="optionsFlow" class="options-grid loading-zone is-loading"></div>
-            <p class="module-footnote">免费版未接入真实期权大单流，本模块基于价格动量、成交量、板块热度、新闻催化与散户关注度生成代理信号。</p>
-          </section>
-        </div>
-
-        <aside class="secondary-column">
-          <section class="section market-strip">
-            <div class="section-title">
-              <h2>市场指数</h2>
-              <span id="indexModuleMeta">FALLBACK · --</span>
-            </div>
-            <div id="indexGrid" class="card-grid six loading-zone is-loading"></div>
-            <article class="market-summary-card">
-              <p class="panel-label">Market Summary</p>
-              <h3 id="marketSummary">等待指数刷新。</h3>
-            </article>
-          </section>
-
-          <section class="section">
-            <div class="section-title">
-              <h2>Premarket Trade Plan</h2>
-              <span id="tradePlanModuleMeta">WATCH · --</span>
-            </div>
-            <article class="trade-plan-card">
-              <h3 id="tradePlanTitle">等待机会扫描。</h3>
-              <p id="tradePlanBody">数据刷新后生成盘前交易计划。</p>
-              <div id="tradePlanList" class="plan-list"></div>
-            </article>
-          </section>
-
-          <section class="section split compact-split">
-            <div>
-              <div class="section-title">
-                <h2>市场情绪</h2>
-                <span id="sentimentModuleMeta">FALLBACK · --</span>
-              </div>
-              <div id="sentimentGrid" class="card-grid three loading-zone is-loading"></div>
-            </div>
-            <aside class="verdict-card">
-              <p class="panel-label">追高判断</p>
-              <h3 id="chaseVerdict">中性偏谨慎</h3>
-              <p id="chaseReason">Greed 未到极端，但科技拥挤度需要观察。</p>
-            </aside>
-          </section>
-
-          <section class="section">
-            <div class="section-title">
-              <h2>利好 / 利空新闻</h2>
-              <span id="newsModuleMeta">FALLBACK · --</span>
-            </div>
-            <div id="newsGrid" class="news-grid loading-zone is-loading"></div>
-          </section>
-
-          <section class="section intel-grid">
-            <article class="intel-panel">
-              <div class="section-title compact">
-                <h2>宏观快讯</h2>
-                <span id="macroModuleMeta">FALLBACK · --</span>
-              </div>
-              <div id="macroFeed" class="feed-list loading-zone is-loading"></div>
-            </article>
-
-            <article class="intel-panel">
-              <div class="section-title compact">
-                <h2>散户情绪 / 恐慌指数</h2>
-                <span id="retailModuleMeta">FALLBACK · --</span>
-              </div>
-              <div id="retailPanel" class="loading-zone is-loading"></div>
-            </article>
-          </section>
-        </aside>
+            <div id="retailPanel" class="loading-zone is-loading"></div>
+          </article>
+        </section>
       </section>
 
       <section class="section source-section">
         <div class="section-title compact">
           <h2>数据源状态</h2>
-          <span id="sourceModuleMeta">FALLBACK · --</span>
+          <span id="sourceModuleMeta">SNAPSHOT · --</span>
         </div>
         <div id="sourceGrid" class="source-grid loading-zone is-loading"></div>
       </section>

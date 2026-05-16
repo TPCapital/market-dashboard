@@ -1,7 +1,7 @@
 const CONFIG = window.DASHBOARD_CONFIG || {};
 const REFRESH_SECONDS = CONFIG.refreshSeconds || 90;
 const CACHE_PREFIX = "ai-us-equity-dashboard:";
-const FALLBACK_SNAPSHOT_LABEL = "备用快照 2026-05-15 盘前";
+const FALLBACK_SNAPSHOT_LABEL = "SNAPSHOT";
 
 const sourceCatalog = {
   yahoo: "Yahoo Finance",
@@ -49,13 +49,13 @@ const symbolMeta = {
 const fallback = {
   yahoo: {
     indices: [
-      metric("SPY", "S&P 500 ETF", 689.12, 0.31, "SPY 走强，宽基风险资产仍有承接。"),
-      metric("QQQ", "Nasdaq ETF", 612.4, 0.46, "QQQ 强于 SPY，科技权重占优。"),
-      metric("NDX", "Nasdaq 100", 25172.18, 0.48, "纳指强于大盘，科技风险偏好占优。"),
-      metric("VIX", "Volatility", 13.62, -2.01, "波动率下行，尾部风险定价降温。"),
-      metric("TNX", "10Y Yield", 4.12, 0.87, "长端利率上行，限制高估值扩张。"),
-      metric("DXY", "Dollar Index", 98.36, -0.11, "美元走弱，流动性环境边际友好。"),
-      metric("GOLD", "Gold", 3378.4, -0.24, "避险需求偏弱，资金倾向风险资产。")
+      metric("SPY", "S&P 500 ETF", 689.12, 0.31, "SNAPSHOT：宽基风险资产仍有承接。"),
+      metric("QQQ", "Nasdaq ETF", 612.4, 0.46, "SNAPSHOT：科技权重占优。"),
+      metric("NDX", "Nasdaq 100", 25172.18, 0.48, "SNAPSHOT：科技风险偏好代理。"),
+      metric("VIX", "Volatility", 13.62, -2.01, "SNAPSHOT：尾部风险定价。"),
+      metric("TNX", "10Y Yield", 4.12, 0.87, "SNAPSHOT：长端利率锚。"),
+      metric("DXY", "Dollar Index", 98.36, -0.11, "SNAPSHOT：美元流动性代理。"),
+      metric("GOLD", "Gold", 3378.4, -0.24, "SNAPSHOT：避险资产代理。")
     ],
     quotes: [
       quote("CSCO", 79.9, 15.03, 3.6),
@@ -341,7 +341,7 @@ async function loadServerSnapshot() {
   const json = await fetchJson(`${url}${joiner}ts=${Date.now()}`);
   const sources = fallbackSources();
   for (const [key, value] of Object.entries(json.sources || {})) {
-    if (!sources[key] || !["live", "proxy", "cached"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
+    if (!sources[key] || !["live", "delayed", "proxy", "cached", "fallback"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
     const updatedAt = Number(value.updatedAt || json.generatedAt || Date.now());
     const status = json.servedFrom === "last-success" || value.status === "cached" ? "cached" : value.status;
     sources[key] = {
@@ -349,7 +349,7 @@ async function loadServerSnapshot() {
       status,
       label: value.label || sourceCatalog[key],
       updatedAt,
-      timestamp: ["live", "proxy"].includes(status) ? formatClock(updatedAt) : `最后成功 ${formatDateTime(updatedAt)}`
+      timestamp: ["live", "delayed", "proxy"].includes(status) ? formatClock(updatedAt) : status === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "SNAPSHOT"
     };
     writeSourceCache(key, value.data, updatedAt);
   }
@@ -442,7 +442,7 @@ function buildDashboard(sources) {
   const stars = normalizeStars(sources.tradingView.data, quoteMap);
   const retail = sources.reddit.data;
   const options = sources.unusualWhales.data;
-  const risk = calculateRisk(sources.yahoo.data.indices, sources.sentiment, retail);
+  const risk = calculateRiskRegime(sources.yahoo.data.indices, sources.sentiment, retail);
   const opportunities = calculatePremarketOpportunities(sources.yahoo.data.quotes, {
     flows,
     news: sources.benzinga.data.news,
@@ -505,16 +505,18 @@ function buildDashboard(sources) {
 function sourceModeLabel(sources) {
   const statuses = Object.values(sources).map((source) => source?.status).filter(Boolean);
   if (statuses.some((status) => status === "live")) return "Live + stored intelligence";
+  if (statuses.some((status) => status === "delayed")) return "Delayed + stored intelligence";
   if (statuses.some((status) => status === "proxy")) return "Proxy intelligence";
   if (statuses.some((status) => status === "cached")) return "Last successful intelligence";
-  return "Fallback snapshot intelligence";
+  return "Snapshot intelligence";
 }
 
 function dataBasisLabel(item) {
   if (item.status === "live") return `资金流基于 LIVE 数据 ${item.timestamp}`;
+  if (item.status === "delayed") return `资金流基于 DELAYED 数据 ${item.timestamp}`;
   if (item.status === "proxy") return `资金流基于 PROXY 数据 ${item.timestamp}`;
   if (item.status === "cached") return `资金流基于最后成功数据 ${item.timestamp}`;
-  return `资金流基于${FALLBACK_SNAPSHOT_LABEL}`;
+  return `资金流基于 SNAPSHOT 数据`;
 }
 
 function formatClock(value) {
@@ -536,9 +538,11 @@ function formatDateTime(value) {
 
 function statusGroup(sourceItems) {
   const liveItems = sourceItems.filter((source) => source?.status === "live" && source.updatedAt);
+  const delayedItems = sourceItems.filter((source) => source?.status === "delayed" && source.updatedAt);
   const proxyItems = sourceItems.filter((source) => source?.status === "proxy" && source.updatedAt);
   const cachedItems = sourceItems.filter((source) => source?.status === "cached" && source.updatedAt);
   const latestLiveAt = liveItems.length ? Math.max(...liveItems.map((source) => source.updatedAt)) : null;
+  const latestDelayedAt = delayedItems.length ? Math.max(...delayedItems.map((source) => source.updatedAt)) : null;
   const latestProxyAt = proxyItems.length ? Math.max(...proxyItems.map((source) => source.updatedAt)) : null;
   const latestCachedAt = cachedItems.length ? Math.max(...cachedItems.map((source) => source.updatedAt)) : null;
   if (latestLiveAt) {
@@ -546,6 +550,13 @@ function statusGroup(sourceItems) {
       status: "live",
       timestamp: formatClock(latestLiveAt),
       fullTimestamp: formatDateTime(latestLiveAt)
+    };
+  }
+  if (latestDelayedAt) {
+    return {
+      status: "delayed",
+      timestamp: formatClock(latestDelayedAt),
+      fullTimestamp: formatDateTime(latestDelayedAt)
     };
   }
   if (latestProxyAt) {
@@ -619,80 +630,37 @@ function normalizeStars(items, quoteMap) {
     .slice(0, 6);
 }
 
-function normalizeNews(items) {
-  return items.map((item, index) => {
-    const translated = translateNewsTitle(item.title);
-    return {
-      category: item.category || "新闻",
-      title: translated.title,
-      originalTitle: item.title,
-      showOriginal: translated.showOriginal,
-      summary: item.summary || item.reason,
-      bias: classifyNewsBias(item.title, item.bias),
+function normalizeNews(items = []) {
+  const cleaned = items
+    .filter((item) => item?.title && item?.originalTitle)
+    .filter((item) => !String(item.originalTitle).toLowerCase().includes("market update"))
+    .map((item, index) => ({
+      ticker: item.ticker || "MACRO",
+      sector: item.sector || "宏观",
+      category: item.category || item.newsType || "新闻",
+      title: item.title,
+      summary: item.summary || "事件进入盘前定价，等待价格确认。",
+      originalTitle: item.originalTitle,
+      bias: normalizeNewsBias(item.bias),
       time: item.time || item.publishedAt || `0${7 - Math.min(index, 5)}:${(50 - index * 7).toString().padStart(2, "0")}`
-    };
-  });
+    }));
+  return cleaned.length ? cleaned : fallback.benzinga.news.map((item) => ({
+    ticker: "AI",
+    sector: "AI 半导体",
+    category: item.category,
+    title: item.title,
+    summary: item.summary,
+    originalTitle: "Snapshot catalyst retained for terminal continuity.",
+    bias: item.bias === "利空" ? "BEARISH" : "BULLISH",
+    time: item.time
+  }));
 }
 
-function translateNewsTitle(title = "") {
-  const original = String(title || "").trim();
-  if (!original) return { title: "市场新闻", showOriginal: false };
-  const dictionary = [
-    [/Advanced Micro Devices/gi, "AMD"],
-    [/Eli Lilly/gi, "礼来"],
-    [/NVIDIA/gi, "英伟达"],
-    [/Federal Reserve/gi, "美联储"],
-    [/inflation forecast/gi, "通胀预测"],
-    [/Social Security/gi, "社保"],
-    [/profit from AI/gi, "受益于 AI"],
-    [/best stock/gi, "最佳股票"],
-    [/price target/gi, "目标价"],
-    [/trial results/gi, "试验结果"],
-    [/reports/gi, "公布"],
-    [/raises/gi, "上调"],
-    [/Patriot Missiles/gi, "爱国者导弹"],
-    [/S&P 500/gi, "标普500"],
-    [/fund managers/gi, "基金经理"],
-    [/space stock/gi, "太空概念股"],
-    [/war fallout/gi, "战争外溢影响"],
-    [/worth your money/gi, "是否值得买"],
-    [/right now/gi, "现在"],
-    [/face-off/gi, "对比"],
-    [/professional/gi, "专业"],
-    [/lose to/gi, "跑输"],
-    [/works/gi, "有效"],
-    [/missiles?/gi, "导弹"],
-    [/stocks?/gi, "股票"],
-    [/market/gi, "市场"],
-    [/strategy/gi, "策略"],
-    [/rocket/gi, "火箭"],
-    [/needs/gi, "需要"],
-    [/Iran/gi, "伊朗"],
-    [/Qatar/gi, "卡塔尔"]
-  ];
-  let translated = original;
-  for (const [pattern, replacement] of dictionary) {
-    translated = translated.replace(pattern, replacement);
-  }
-  const lower = original.toLowerCase();
-  const prefix = classifyNewsBias(original) === "利好" ? "利好：" : classifyNewsBias(original) === "利空" ? "利空：" : "中性：";
-  if (translated !== original) return { title: `${prefix}${translated}`, showOriginal: true };
-  if (/upgrade|buy rating|price target/.test(lower)) return { title: "利好：分析师评级或目标价上修", showOriginal: true };
-  if (/downgrade|cut|warning|loss|lawsuit|investigation/.test(lower)) return { title: "利空：评级下修或风险事件", showOriginal: true };
-  if (/earnings|revenue|guidance/.test(lower)) return { title: "财报：业绩与指引更新", showOriginal: true };
-  if (/\bai\b|chip|semiconductor|nvidia/.test(lower)) return { title: "AI：半导体与人工智能主线更新", showOriginal: true };
-  return { title: `${prefix}市场动态更新`, showOriginal: true };
-}
-
-function classifyNewsBias(title = "", fallbackBias = "中性") {
-  const lower = String(title || "").toLowerCase();
-  const bullish = /(beat|raise|raises|upgrade|price target|partnership|contract|\bai\b|launch|demand|growth|guidance raise|buy rating)/.test(lower);
-  const bearish = /(miss|cut|downgrade|lawsuit|investigation|war|tariff|delay|weak demand|warning|loss|weak|fallout)/.test(lower);
-  const neutral = /(strategy|comparison|analysis|outlook|worth|fund managers)/.test(lower);
-  if (bullish && !bearish) return "利好";
-  if (bearish && !bullish) return "利空";
-  if (neutral) return "中性";
-  return ["利好", "利空", "中性"].includes(fallbackBias) ? fallbackBias : "中性";
+function normalizeNewsBias(bias = "NEUTRAL") {
+  if (bias === "利好") return "BULLISH";
+  if (bias === "利空") return "BEARISH";
+  if (["BULLISH", "BEARISH", "NEUTRAL"].includes(bias)) return bias;
+  return "NEUTRAL";
 }
 
 function calculatePremarketOpportunities(quotes, context) {
@@ -852,9 +820,29 @@ function durability(live, change) {
   return "偏事件交易，持续性待验证。";
 }
 
-function calculateRisk(indices, sentiment, retail) {
+function calculateRiskRegime(indices, sentiment, retail) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
   const fearGreed = sentiment.find((item) => item.id === "Fear & Greed")?.value || 50;
+  const qqq = byId.QQQ?.change || byId.NDX?.change || 0;
+  const vix = byId.VIX?.change || 0;
+  const dxy = byId.DXY?.change || 0;
+  const tnx = byId.TNX?.change || 0;
+  if (qqq > 0 && vix < 0 && dxy <= 0.15 && Math.abs(tnx) < 1.2) {
+    return {
+      score: 72,
+      mode: "Risk-On",
+      conclusion: "科技风险偏好增强，AI 半导体继续主导市场，谨慎追高，回踩优先。",
+      inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
+    };
+  }
+  if (vix > 0 && dxy > 0 && tnx > 0 && qqq < 0) {
+    return {
+      score: 34,
+      mode: "Risk-Off",
+      conclusion: "VIX、DXY 与 TNX 同步施压，降低高 beta 暴露，等待风险释放。",
+      inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
+    };
+  }
   let score = 50;
 
   score += (byId.SPX?.change || 0) * 5.5;
@@ -986,6 +974,7 @@ function renderModuleStatus(statusMap) {
       const node = document.querySelector(selector);
       if (!node) return;
       node.classList.toggle("module-live", item.status === "live");
+      node.classList.toggle("module-delayed", item.status === "delayed");
       node.classList.toggle("module-proxy", item.status === "proxy");
       node.classList.toggle("module-cached", item.status === "cached");
       node.classList.toggle("module-fallback", item.status === "fallback");
@@ -997,9 +986,10 @@ function renderModuleStatus(statusMap) {
 function statusLabel(status, key = "") {
   if (key === "options" && status === "live") return "LIVE OPTIONS FLOW";
   if (status === "live") return "LIVE";
+  if (status === "delayed") return "DELAYED";
   if (status === "proxy") return "PROXY";
   if (status === "cached") return "LAST";
-  return "FALLBACK";
+  return "SNAPSHOT";
 }
 
 function renderSources(items) {
@@ -1087,8 +1077,8 @@ function renderOptions(items) {
   html("#optionsFlow", items.map((item) => `
     <div class="feed-item option-proxy-card">
       <div class="row-head"><span>${escapeHtml(item.symbol)}</span><span>${escapeHtml(item.sector || "其他")}</span></div>
-      <div class="option-score">Flow Proxy Score ${Math.round(Number(item.score || 0))}</div>
-      <strong class="option-direction">${escapeHtml(item.direction || item.type || "WATCHLIST ONLY")}</strong>
+      <div class="option-score">${escapeHtml(item.conviction || item.direction || "WATCHLIST")}</div>
+      <strong class="option-direction">PROXY SCORE ${Math.round(Number(item.score || 0))}</strong>
       <p>${escapeHtml(item.summary)}</p>
       <small>${escapeHtml(item.risk || "风险：需等待开盘量价确认。")}</small>
     </div>
@@ -1176,17 +1166,26 @@ function renderStars(items) {
 
 function renderNews(items) {
   html("#newsGrid", items.map((item) => `
-    <article class="news-card ${item.bias === "利空" ? "bearish-card" : item.bias === "利好" ? "bullish-card" : ""}">
+    <article class="news-card ${newsBiasClass(item.bias)}">
       <details>
         <summary>
-          <span class="news-head"><span class="tag">${escapeHtml(item.category)}</span><span class="${item.bias === "利空" ? "down" : item.bias === "利好" ? "up" : "flat"}">${escapeHtml(item.bias)} · ${escapeHtml(item.time)}</span></span>
+          <span class="news-head">
+            <span><b>${escapeHtml(item.ticker)}</b><em>${escapeHtml(item.sector)}</em></span>
+            <span class="${item.bias === "BEARISH" ? "down" : item.bias === "BULLISH" ? "up" : "flat"}">${escapeHtml(item.bias)} · ${escapeHtml(item.time)}</span>
+          </span>
           <strong class="news-title-cn">${escapeHtml(item.title)}</strong>
-          ${item.showOriginal ? `<em class="news-title-en">${escapeHtml(item.originalTitle)}</em>` : ""}
+          <em class="news-title-en">Original: ${escapeHtml(item.originalTitle)}</em>
         </summary>
         <p>${escapeHtml(item.summary)}</p>
       </details>
     </article>
   `).join(""));
+}
+
+function newsBiasClass(bias) {
+  if (bias === "BULLISH") return "bullish-card";
+  if (bias === "BEARISH") return "bearish-card";
+  return "neutral-card";
 }
 
 function startCountdown() {

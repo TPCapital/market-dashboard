@@ -1,5 +1,5 @@
 window.DASHBOARD_CONFIG = {
-  refreshSeconds: 180,
+  refreshSeconds: 60,
 
   // Optional deployment endpoints. Leave empty for static fallback mode.
   // Each endpoint must return JSON for its own module only; the app will not
@@ -18,7 +18,6 @@ window.DASHBOARD_CONFIG = {
   yahooSymbols: [
     "SPY",
     "QQQ",
-    "^GSPC",
     "^NDX",
     "^VIX",
     "^TNX",
