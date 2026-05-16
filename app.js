@@ -1,7 +1,7 @@
 const CONFIG = window.DASHBOARD_CONFIG || {};
 const REFRESH_SECONDS = CONFIG.refreshSeconds || 90;
 const CACHE_PREFIX = "ai-us-equity-dashboard:";
-const FALLBACK_SNAPSHOT_LABEL = "SNAPSHOT";
+const FALLBACK_SNAPSHOT_LABEL = "快照数据（SNAPSHOT）";
 
 const sourceCatalog = {
   yahoo: "Yahoo Finance",
@@ -53,13 +53,13 @@ const symbolMeta = {
 const fallback = {
   yahoo: {
     indices: [
-      metric("SPY", "S&P 500 ETF", 689.12, 0.31, "SNAPSHOT：宽基风险资产仍有承接。"),
-      metric("QQQ", "Nasdaq ETF", 612.4, 0.46, "SNAPSHOT：科技权重占优。"),
-      metric("NDX", "Nasdaq 100", 25172.18, 0.48, "SNAPSHOT：科技风险偏好代理。"),
-      metric("VIX", "Volatility", 13.62, -2.01, "SNAPSHOT：尾部风险定价。"),
-      metric("TNX", "10Y Yield", 4.12, 0.87, "SNAPSHOT：长端利率锚。"),
-      metric("DXY", "Dollar Index", 98.36, -0.11, "SNAPSHOT：美元流动性代理。"),
-      metric("GOLD", "Gold", 3378.4, -0.24, "SNAPSHOT：避险资产代理。")
+      metric("SPY", "S&P 500 ETF", 689.12, 0.31, "快照数据（SNAPSHOT）：宽基风险资产仍有承接。"),
+      metric("QQQ", "Nasdaq ETF", 612.4, 0.46, "快照数据（SNAPSHOT）：科技权重占优。"),
+      metric("NDX", "Nasdaq 100", 25172.18, 0.48, "快照数据（SNAPSHOT）：科技风险偏好代理。"),
+      metric("VIX", "Volatility", 13.62, -2.01, "快照数据（SNAPSHOT）：尾部风险定价。"),
+      metric("TNX", "10Y Yield", 4.12, 0.87, "快照数据（SNAPSHOT）：长端利率锚。"),
+      metric("DXY", "Dollar Index", 98.36, -0.11, "快照数据（SNAPSHOT）：美元流动性代理。"),
+      metric("GOLD", "Gold", 3378.4, -0.24, "快照数据（SNAPSHOT）：避险资产代理。")
     ],
     quotes: [
       quote("CSCO", 79.9, 15.03, 3.6),
@@ -135,7 +135,7 @@ const fallback = {
     ]
   },
   sentiment: [
-    metric("Fear & Greed", "CNN Proxy", 66, 0, "Greed 区间，乐观但未进入极端亢奋。"),
+    metric("Fear & Greed", "CNN Proxy", 66, 0, "贪婪区间，乐观但未进入极端亢奋。"),
     metric("RSI", "SPX 14D", 61, 2.1, "动能偏强，尚未触及典型超买阈值。"),
     metric("Put/Call", "CBOE Proxy", 0.82, -0.04, "保护性需求偏低，追涨拥挤度上升。")
   ]
@@ -273,7 +273,7 @@ async function loadYahoo() {
         change: fallbackMetric.change,
         note: fallbackMetric.note?.startsWith("SNAPSHOT")
           ? fallbackMetric.note
-          : "SNAPSHOT：实时源暂不可用，使用结构快照。"
+          : "快照数据（SNAPSHOT）：实时源暂不可用，使用结构快照。"
       };
     }
 
@@ -281,7 +281,7 @@ async function loadYahoo() {
       ...fallbackMetric,
       value,
       change,
-      note: "LIVE / DELAYED：多源行情。"
+      note: "实时/延迟（LIVE / DELAYED）：多源行情。"
     };
   };
 
@@ -540,7 +540,7 @@ function sanitizeIndices(indices = []) {
         ...fallbackMetric,
         value: fallbackById.get(fallbackMetric.id)?.value || fallbackMetric.value,
         change: fallbackById.get(fallbackMetric.id)?.change ?? fallbackMetric.change,
-        note: fallbackMetric.note?.startsWith("SNAPSHOT") ? fallbackMetric.note : "SNAPSHOT：实时源暂不可用，使用结构快照。"
+        note: fallbackMetric.note?.includes("SNAPSHOT") ? fallbackMetric.note : "快照数据（SNAPSHOT）：实时源暂不可用，使用结构快照。"
       };
     }
     return live;
@@ -549,19 +549,19 @@ function sanitizeIndices(indices = []) {
 
 function sourceModeLabel(sources) {
   const statuses = Object.values(sources).map((source) => source?.status).filter(Boolean);
-  if (statuses.some((status) => status === "live")) return "Live + stored intelligence";
-  if (statuses.some((status) => status === "delayed")) return "Delayed + stored intelligence";
-  if (statuses.some((status) => status === "proxy")) return "Proxy intelligence";
-  if (statuses.some((status) => status === "cached")) return "Last successful intelligence";
-  return "Snapshot intelligence";
+  if (statuses.some((status) => status === "live")) return "实时 + 结构化情报";
+  if (statuses.some((status) => status === "delayed")) return "延迟 + 结构化情报";
+  if (statuses.some((status) => status === "proxy")) return "代理推断情报";
+  if (statuses.some((status) => status === "cached")) return "上次成功数据";
+  return "快照数据";
 }
 
 function dataBasisLabel(item) {
-  if (item.status === "live") return `资金流基于 LIVE 数据 ${item.timestamp}`;
-  if (item.status === "delayed") return `资金流基于 DELAYED 数据 ${item.timestamp}`;
-  if (item.status === "proxy") return `资金流基于 PROXY 数据 ${item.timestamp}`;
+  if (item.status === "live") return `资金流基于实时数据 ${item.timestamp}`;
+  if (item.status === "delayed") return `资金流基于延迟数据 ${item.timestamp}`;
+  if (item.status === "proxy") return `资金流基于代理推断数据 ${item.timestamp}`;
   if (item.status === "cached") return `资金流基于最后成功数据 ${item.timestamp}`;
-  return `资金流基于 SNAPSHOT 数据`;
+  return `资金流基于快照数据`;
 }
 
 function formatClock(value) {
@@ -948,11 +948,11 @@ function buildPremarketTradePlan(opportunities, flows, risk, options) {
   const topLongs = opportunities.filter((item) => ["HIGH MOMENTUM LONG", "OPENING BREAKOUT WATCH"].includes(item.signal)).slice(0, 3);
   const hedges = opportunities.filter((item) => item.signal === "PUT / HEDGE WATCH").slice(0, 2);
   return {
-    title: `${leader}仍是盘前主线，${risk.mode} 下优先等开盘确认。`,
+    title: `${leader}仍是盘前主线，${displayRiskMode(risk.mode)} 下优先等开盘确认。`,
     body: risk.mode === "Risk-Off"
       ? "风险偏好转弱，降低高 beta 追涨，优先观察放量失败和对冲机会。"
       : "市场仍可寻找顺势机会，但无量高开不追，优先交易回踩 VWAP 后重新转强的标的。",
-    focus: topLongs.length ? topLongs.map((item) => `${item.symbol}：${item.openingConfirmation} / ${item.signal}`) : ["等待相对成交量和板块确认"],
+    focus: topLongs.length ? topLongs.map((item) => `${item.symbol}：${displayTradeState(item.openingConfirmation)} / ${displayTradeState(item.signal)}`) : ["等待相对成交量和板块确认"],
     avoid: [
       "无量高开",
       "低成交量 breakout",
@@ -967,11 +967,11 @@ function buildScannerStatus(opportunities, flows, risk) {
   const momentum = opportunities.filter((item) => item.score >= 65).length;
   const confirmed = opportunities.filter((item) => item.openingConfirmation === "CONFIRMED").length;
   return {
-    rvLeader: rvLeader ? `Relative Volume Leader ${rvLeader.symbol} ${rvLeader.relativeVolume.toFixed(2)}x` : "Relative Volume Leader --",
-    strongestSector: strongest ? `Strongest Sector ${strongest.sector}` : "Strongest Sector --",
-    riskAppetite: `Risk Appetite ${risk.mode}`,
-    premarketMomentum: `Premarket Momentum ${momentum} WATCH`,
-    openingBias: confirmed ? `Opening Bias ${confirmed} CONFIRMED` : "Opening Bias EARLY ONLY"
+    rvLeader: rvLeader ? `相对成交量龙头 ${rvLeader.symbol} ${rvLeader.relativeVolume.toFixed(2)}x` : "相对成交量龙头 --",
+    strongestSector: strongest ? `最强板块 ${strongest.sector}` : "最强板块 --",
+    riskAppetite: `风险偏好 ${displayRiskMode(risk.mode)}`,
+    premarketMomentum: `盘前动量 ${momentum} 个观察名单`,
+    openingBias: confirmed ? `开盘倾向 ${confirmed} 个已确认` : "开盘倾向 仅早盘观察"
   };
 }
 
@@ -1054,7 +1054,7 @@ function sentimentVerdict(sentiment, retail) {
   const pc = sentiment.find((item) => item.id === "Put/Call")?.value || 1;
   if (fng >= 75 || rsi >= 70 || pc <= 0.65 || retail.score >= 78) return ["不宜追高", "情绪接近过热，等待回踩确认。"];
   if (fng <= 30 || pc >= 1.2 || retail.score <= 35) return ["恐慌可观察", "保护性需求高，等卖压衰竭。"];
-  return ["可进攻但控仓", "乐观未极端，适合顺势不适合重仓追价。"];
+  return ["可进攻但控仓", "乐观未极端，适合顺势但不适合重仓追价。"];
 }
 
 function strategyFrom(risk, flows, retail, options) {
@@ -1086,7 +1086,7 @@ function render(dashboard) {
   const [chaseVerdict, chaseReason] = sentimentVerdict(dashboard.sentiment, dashboard.retail);
 
   document.body.dataset.risk = dashboard.risk.mode.toLowerCase();
-  text("#riskMode", dashboard.risk.mode);
+  text("#riskMode", displayRiskMode(dashboard.risk.mode));
   text("#riskScore", dashboard.risk.score);
   text("#riskConclusion", dashboard.risk.conclusion);
   text("#strategyText", dashboard.strategy);
@@ -1105,15 +1105,15 @@ function render(dashboard) {
   text("#premarketMomentum", dashboard.scannerStatus.premarketMomentum);
   text("#openingBias", dashboard.scannerStatus.openingBias);
   document.querySelector("#gaugeFill").style.width = `${dashboard.risk.score}%`;
-  document.querySelector("#statusDot").style.color = dashboard.sourceMode.startsWith("Live") ? "var(--green)" : "var(--gold)";
-  document.querySelector("#statusDot").style.background = dashboard.sourceMode.startsWith("Live") ? "var(--green)" : "var(--gold)";
+  document.querySelector("#statusDot").style.color = dashboard.sourceMode.startsWith("实时") ? "var(--green)" : "var(--gold)";
+  document.querySelector("#statusDot").style.background = dashboard.sourceMode.startsWith("实时") ? "var(--green)" : "var(--gold)";
 
   renderModuleStatus(dashboard.moduleStatus);
   renderSources(dashboard.sourceStatus);
   renderRiskInputs(dashboard.risk);
   renderMetricGrid("#indexGrid", dashboard.indices);
   renderMacro(dashboard.macro);
-  renderRetail(dashboard.retail);
+  renderRetail(dashboard.retail, dashboard.moduleStatus.retail);
   renderOptions(dashboard.options);
   renderOpportunities(dashboard.opportunities);
   renderTradePlan(dashboard.tradePlan);
@@ -1158,12 +1158,72 @@ function renderModuleStatus(statusMap) {
 }
 
 function statusLabel(status, key = "") {
-  if (key === "options" && status === "live") return "LIVE OPTIONS FLOW";
-  if (status === "live") return "LIVE";
-  if (status === "delayed") return "DELAYED";
-  if (status === "proxy") return "PROXY";
-  if (status === "cached") return "LAST";
-  return "SNAPSHOT";
+  if (key === "options" && status === "live") return "实时期权流（LIVE）";
+  if (status === "live") return "实时（LIVE）";
+  if (status === "delayed") return "延迟（DELAYED）";
+  if (status === "proxy") return "代理推断（PROXY）";
+  if (status === "cached") return "上次数据";
+  return "快照数据（SNAPSHOT）";
+}
+
+function displayRiskMode(mode) {
+  if (mode === "Risk-On") return "风险偏好开启（Risk-On）";
+  if (mode === "Risk-Off") return "风险规避（Risk-Off）";
+  if (mode === "Neutral") return "中性（Neutral）";
+  return mode || "--";
+}
+
+function displayNewsBias(bias) {
+  if (bias === "BULLISH" || bias === "利好") return "利好（Bullish）";
+  if (bias === "BEARISH" || bias === "利空") return "利空（Bearish）";
+  return "中性（Neutral）";
+}
+
+function displayTradeState(value = "") {
+  const map = {
+    WATCHLIST: "观察名单（Watchlist）",
+    "WATCHLIST ONLY": "观察名单（Watchlist）",
+    "HIGH MOMENTUM LONG": "强势做多（High Momentum Long）",
+    "OPENING BREAKOUT WATCH": "开盘突破观察（Opening Breakout Watch）",
+    "PUT / HEDGE WATCH": "对冲观察（Put / Hedge Watch）",
+    "PUT / HEDGE PROXY": "对冲代理（Put / Hedge Proxy）",
+    "CALL MOMENTUM PROXY": "看涨动量代理（Call Momentum Proxy）",
+    "LOW QUALITY": "低质量机会（Low Quality）",
+    "LOW QUALITY / IGNORE": "低质量机会（Low Quality）",
+    CONFIRMED: "已确认（Confirmed）",
+    "EARLY ONLY": "仅早盘观察（Early Only）",
+    "FAILED OPEN": "开盘失败（Failed Open）",
+    "BULLISH ABOVE VWAP": "VWAP 上方偏强（Bullish Above VWAP）",
+    "WEAK BELOW VWAP": "VWAP 下方偏弱（Weak Below VWAP）",
+    "VWAP WATCH": "VWAP 观察（VWAP Watch）",
+    "HIGH CONVICTION": "高置信度（High Conviction）",
+    MOMENTUM: "动量机会（Momentum）",
+    RISKY: "高风险机会（Risky）",
+    PROXY: "代理推断（Proxy）",
+    "Chase Risk": "追高风险",
+    "Gap Exhaustion": "跳空衰竭",
+    "Crowded Risk": "散户拥挤",
+    "Weak Volume": "量能偏弱",
+    "Strong Trend": "趋势强劲",
+    "Early Only": "仅早盘观察",
+    "Put Watch": "看跌观察",
+    WATCH: "观察"
+  };
+  return map[value] || value;
+}
+
+function displayMetricId(id) {
+  return {
+    "Fear & Greed": "贪婪 / 恐慌指数",
+    "Put/Call": "看涨看跌比"
+  }[id] || id;
+}
+
+function displayMetricName(name) {
+  return {
+    "CNN Proxy": "CNN 代理",
+    "CBOE Proxy": "CBOE 代理"
+  }[name] || name;
 }
 
 function renderSources(items) {
@@ -1193,7 +1253,7 @@ function renderMetricGrid(selector, items, type = "index") {
     const inverse = ["VIX", "TNX", "GOLD", "DXY", "Put/Call"].includes(item.id);
     return `
       <article class="metric-card">
-        <div class="metric-head"><span>${escapeHtml(item.id)}</span><span>${escapeHtml(item.name || "")}</span></div>
+        <div class="metric-head"><span>${escapeHtml(displayMetricId(item.id))}</span><span>${escapeHtml(displayMetricName(item.name || ""))}</span></div>
         <div class="metric-value">${formatNumber(item.value)}</div>
         <div class="metric-change ${changeClass(item.change, inverse)}">${type === "sentiment" && item.id !== "Put/Call" ? signedRaw(item.change) : signed(item.change)}</div>
         <p>${escapeHtml(item.note)}</p>
@@ -1204,7 +1264,7 @@ function renderMetricGrid(selector, items, type = "index") {
 
 function renderRiskInputs(risk) {
   html("#riskInputs", risk.inputs.map(([label, value]) => `
-    <div class="factor-pill"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>
+    <div class="factor-pill"><span>${escapeHtml(displayMetricId(label))}</span><strong>${escapeHtml(value)}</strong></div>
   `).join(""));
 }
 
@@ -1218,7 +1278,7 @@ function renderMacro(items) {
   `).join(""));
 }
 
-function renderRetail(retail) {
+function renderRetail(retail, status = { status: "fallback" }) {
   const score = clamp(retail.score || 50);
   const angle = -90 + score * 1.8;
   const fearLabel = score >= 72 ? "贪婪" : score <= 35 ? "恐慌" : score >= 56 ? "偏乐观" : "中性";
@@ -1235,15 +1295,16 @@ function renderRetail(retail) {
         <strong>${escapeHtml(retail.tone)}</strong>
         <p>${escapeHtml(retail.summary)}</p>
         <div class="dial-scale">
-          <span>Fear</span>
-          <span>Neutral</span>
-          <span>Greed</span>
+          <span>恐慌</span>
+          <span>中性</span>
+          <span>贪婪</span>
         </div>
       </div>
     </div>
     <div class="mention-grid">
-      ${retail.mentions.map(([symbol, count]) => `<span>${escapeHtml(symbol)} <b>${count}</b></span>`).join("")}
+      ${retail.mentions.map(([symbol, count]) => `<span>${escapeHtml(symbol)} <b>${count}次</b></span>`).join("")}
     </div>
+    <p class="retail-note">${status.status === "fallback" ? "SNAPSHOT：当前为备用热度快照，等待 Reddit 数据刷新。" : "数字代表 WallStreetBets 近期帖子中股票代码被提及次数，仅代表散户关注度，不代表买卖信号。"}</p>
   `);
 }
 
@@ -1251,8 +1312,8 @@ function renderOptions(items) {
   html("#optionsFlow", items.map((item) => `
     <div class="feed-item option-proxy-card">
       <div class="row-head"><span>${escapeHtml(item.symbol)}</span><span>${escapeHtml(item.sector || "其他")}</span></div>
-      <div class="option-score">${escapeHtml(item.conviction || item.direction || "WATCHLIST")}</div>
-      <strong class="option-direction">PROXY SCORE ${Math.round(Number(item.score || 0))}</strong>
+      <div class="option-score">${escapeHtml(displayTradeState(item.conviction || item.direction || "WATCHLIST"))}</div>
+      <strong class="option-direction">代理评分（Proxy Score） ${Math.round(Number(item.score || 0))}</strong>
       <p>${escapeHtml(item.summary)}</p>
       <small>${escapeHtml(item.risk || "风险：需等待开盘量价确认。")}</small>
     </div>
@@ -1269,16 +1330,16 @@ function renderOpportunities(items) {
         </div>
         <b>${item.score}</b>
       </div>
-      <div class="signal-pill">${escapeHtml(item.signal)}</div>
+      <div class="signal-pill">${escapeHtml(displayTradeState(item.signal))}</div>
       <p>${escapeHtml(item.logic)}</p>
       <div class="opportunity-meta">
-        <span>PROXY</span>
+        <span>代理推断（Proxy）</span>
         <span>RVOL ${Number(item.relativeVolume || 0).toFixed(2)}x</span>
-        <span>${escapeHtml(item.vwapBias)}</span>
-        <span>${escapeHtml(item.openingConfirmation)}</span>
+        <span>${escapeHtml(displayTradeState(item.vwapBias))}</span>
+        <span>${escapeHtml(displayTradeState(item.openingConfirmation))}</span>
       </div>
       <div class="risk-tags">
-        ${item.riskTags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+        ${item.riskTags.map((tag) => `<span>${escapeHtml(displayTradeState(tag))}</span>`).join("")}
       </div>
     </article>
   `).join(""));
@@ -1349,7 +1410,7 @@ function renderNews(items) {
         <summary>
           <span class="news-head">
             <span><b>${escapeHtml(item.ticker)}</b><em>${escapeHtml(item.sector)}</em></span>
-            <span class="${item.bias === "BEARISH" ? "down" : item.bias === "BULLISH" ? "up" : "flat"}">${escapeHtml(item.bias)} · ${escapeHtml(item.time)}</span>
+            <span class="${item.bias === "BEARISH" ? "down" : item.bias === "BULLISH" ? "up" : "flat"}">${escapeHtml(displayNewsBias(item.bias))} · ${escapeHtml(item.time)}</span>
           </span>
           <strong class="news-title-cn">${escapeHtml(item.title)}</strong>
           <em class="news-title-en">Original: ${escapeHtml(item.originalTitle)}</em>
@@ -1369,7 +1430,7 @@ function newsBiasClass(bias) {
 function startCountdown() {
   let next = REFRESH_SECONDS;
   setInterval(() => {
-    text("#refreshTimer", `Auto refresh ${next}s`);
+    text("#refreshTimer", `自动刷新 ${next}s`);
     next -= 1;
     if (next < 0) next = REFRESH_SECONDS;
   }, 1000);
