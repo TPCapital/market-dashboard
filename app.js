@@ -438,7 +438,7 @@ function fallbackSource(key, data) {
 function buildDashboard(sources) {
   const quoteMap = new Map(sources.yahoo.data.quotes.map((item) => [item.symbol, item]));
   const flows = normalizeSectors(sources.finviz.data);
-  const movers = normalizeMovers(sources.benzinga.data.movers, quoteMap);
+  const movers = normalizeMovers(sources.benzinga.data.movers, quoteMap, sources.yahoo.data.quotes);
   const stars = normalizeStars(sources.tradingView.data, quoteMap);
   const retail = sources.reddit.data;
   const options = sources.unusualWhales.data;
@@ -591,8 +591,9 @@ function normalizeSectors(items) {
     .slice(0, 6);
 }
 
-function normalizeMovers(items, quoteMap) {
-  return items
+function normalizeMovers(items = [], quoteMap, quotes = []) {
+  const sourceItems = items.length ? items : deriveMoversFromQuotes(quotes);
+  return sourceItems
     .map((item) => {
       const live = quoteMap.get(item.symbol);
       const [name, sectorName] = symbolMeta[item.symbol] || [item.name || item.symbol, item.sector || "其他"];
@@ -605,6 +606,24 @@ function normalizeMovers(items, quoteMap) {
         reason: item.reason || item.summary || "Benzinga 异动新闻待确认。",
         bias: item.bias || (change >= 0 ? "利好" : "利空"),
         durability: durability(live, change)
+      };
+    })
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+    .slice(0, 10);
+}
+
+function deriveMoversFromQuotes(quotes = []) {
+  return [...quotes]
+    .filter((item) => item?.symbol)
+    .map((item) => {
+      const change = Number(item.preMarketChange ?? item.regularMarketChangePercent ?? 0);
+      return {
+        symbol: item.symbol,
+        name: item.name,
+        sector: item.sector,
+        change,
+        reason: "价格异动进入盘前扫描，等待开盘量能确认。",
+        bias: change >= 0 ? "利好" : "利空"
       };
     })
     .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
@@ -1127,6 +1146,10 @@ function signalClass(signal) {
 }
 
 function renderMoverTable(items) {
+  if (!items?.length) {
+    html("#moverTable", `<div class="empty-state">暂无有效异动数据，等待下一次快照刷新。</div>`);
+    return;
+  }
   html("#moverTable", `
     <div class="table-row table-head"><span>股票</span><span>涨跌幅</span><span>板块</span><span>Benzinga 异动原因</span></div>
     ${items.map((item) => `

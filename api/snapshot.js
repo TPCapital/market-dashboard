@@ -498,17 +498,26 @@ function deriveSectors(quotes) {
 }
 
 function deriveMovers(quotes, news = []) {
+  const sourceQuotes = (quotes && quotes.length ? quotes : snapshotQuotes)
+    .filter((item) => Number.isFinite(Number(item.preMarketChange ?? item.regularMarketChangePercent)));
   const tickerNews = new Set(news.map((item) => item.ticker).filter(Boolean));
-  return [...(quotes || [])].sort((a, b) => Math.abs(b.preMarketChange) - Math.abs(a.preMarketChange)).slice(0, 10).map((item) => ({
+  return [...sourceQuotes].sort((a, b) => {
+    const aChange = Number(a.preMarketChange ?? a.regularMarketChangePercent ?? 0);
+    const bChange = Number(b.preMarketChange ?? b.regularMarketChangePercent ?? 0);
+    return Math.abs(bChange) - Math.abs(aChange);
+  }).slice(0, 10).map((item) => {
+    const change = Number(item.preMarketChange ?? item.regularMarketChangePercent ?? 0);
+    return {
     symbol: item.symbol,
     name: item.name,
     sector: item.sector,
-    change: item.preMarketChange,
+    change,
     reason: tickerNews.has(item.symbol)
       ? "盘前价格异动与新闻催化同步出现。"
-      : "价格动量进入盘前扫描，等待开盘量能确认。",
-    bias: item.preMarketChange >= 0 ? "利好" : "利空"
-  }));
+      : "价格异动进入盘前扫描，等待开盘量能确认。",
+    bias: change >= 0 ? "利好" : "利空"
+  };
+  });
 }
 
 function deriveOptionsProxy(quotes, context = {}) {
@@ -602,7 +611,7 @@ export async function buildSnapshot(req) {
   const riskRegime = calculateRiskRegime(yahoo.data?.indices || snapshotIndices);
 
   const finviz = keepLastGood("finviz", source("finviz", sectorData, "proxy", generatedAt, "Sector Heat Proxy"));
-  const benzinga = keepLastGood("benzinga", source("benzinga", { movers: moverData, news }, news.length ? "live" : "proxy", generatedAt, "News Catalyst Proxy"));
+  const benzinga = keepLastGood("benzinga", source("benzinga", { movers: moverData.length ? moverData : deriveMovers(snapshotQuotes, news), news }, "proxy", generatedAt, "News Catalyst Proxy"));
   const unusualWhales = keepLastGood("unusualWhales", source("unusualWhales", optionProxyData, "proxy", generatedAt, "Options Flow Proxy"));
   const xMacro = source("xMacro", [
     { source: "Macro Monitor", title: `${riskRegime.mode} 结构监控`, summary: riskRegime.mode === "Risk-On" ? "QQQ、VIX、DXY 与 TNX 组合支持科技风险偏好。" : "宏观变量仍需观察，避免无量追高。", tone: riskRegime.mode === "Risk-Off" ? "bearish" : "bullish" }
