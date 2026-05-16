@@ -85,7 +85,7 @@ const snapshotNews = [
     category: "主线",
     newsType: "AI demand",
     bias: "BULLISH",
-    title: "NVDA｜AI 芯片需求逻辑继续强化",
+    title: "NVDA｜AI 芯片龙头买盘关注升温",
     summary: "机构继续关注 AI 数据中心扩张主线，开盘需确认量能延续。",
     originalTitle: "NVIDIA remains central to AI data center demand",
     originalSummary: "Snapshot catalyst retained for terminal continuity.",
@@ -97,7 +97,7 @@ const snapshotNews = [
     category: "主线",
     newsType: "semiconductor",
     bias: "BULLISH",
-    title: "AMD｜AI 芯片追赶逻辑进入盘前定价",
+    title: "AMD｜AI 芯片追赶逻辑继续发酵",
     summary: "资金继续评估 AMD 在 AI 加速器链条中的弹性。",
     originalTitle: "Advanced Micro Devices draws attention as an AI GPU beneficiary",
     originalSummary: "Snapshot catalyst retained for terminal continuity.",
@@ -437,7 +437,7 @@ function detectNewsType(news) {
 
 function isMarketRelevantNews(news, type) {
   const lower = `${news.title || ""} ${news.summary || ""}`.toLowerCase();
-  if (/retirement|social security|dividend income|roth ira|personal finance/.test(lower)) return false;
+  if (/retirement|social security|dividend income|roth ira|personal finance|advice|saving this for years/.test(lower)) return false;
   return /(fed|cpi|treasury|nasdaq|s&p|dow|ai|ipo|crypto|bitcoin|oil|gold|nuclear|uranium|rates|inflation)/.test(lower)
     || ["macro", "inflation", "crypto", "war", "IPO", "nuclear"].includes(type);
 }
@@ -449,20 +449,27 @@ function classifyNewsBias(text, type) {
   return "NEUTRAL";
 }
 
-function makeReadableChineseNewsTitle({ ticker, type, originalTitle }) {
-  const symbol = ticker || "MACRO";
+function translateEnglishTitleToChineseEvent(originalTitle, ticker, type) {
   const lower = String(originalTitle || "").toLowerCase();
-  let event = "事件催化进入盘前定价";
-  if (/price target|raises|raise|upgrade/.test(lower)) event = "目标价上调强化买盘预期";
-  else if (/downgrade|cut/.test(lower)) event = "评级下修压制风险偏好";
-  else if (/\bai\b|nvidia|amd|data center|chip|gpu|server/.test(lower)) event = "AI 需求逻辑继续强化";
-  else if (/earnings|reports|results|revenue/.test(lower)) event = "财报或业绩结果进入定价";
-  else if (/trial|drug|weight loss|eli lilly|lilly/.test(lower)) event = "医药试验结果引发波动";
-  else if (/fed|treasury|inflation|rates|yield/.test(lower)) event = "利率与通胀预期影响市场";
-  else if (/futures|nasdaq|s&p 500|dow jones|dow/.test(lower)) event = "股指期货维持高位震荡";
-  else if (/ipo|openai|spacex|anthropic/.test(lower)) event = "AI IPO 预期升温";
-  else if (/uranium|power|nuclear|nuscale|oklo|nano nuclear/.test(lower)) event = "核能主题波动升温";
-  return `${symbol}｜${event}`;
+
+  if (/nvidia|nvda/.test(lower)) return "AI 芯片龙头买盘关注升温";
+  if (/amd|advanced micro devices/.test(lower)) return "AI 芯片追赶逻辑继续发酵";
+  if (/nuscale|smr|nuclear|oklo|uranium/.test(lower)) return "核能主题长期预期升温";
+  if (/vanguard|etf|buffett/.test(lower)) return "资金配置偏好转向低成本 ETF";
+  if (/trump|trades|insiders/.test(lower)) return "政治交易线索引发市场关注";
+  if (/futures|dow jones|nasdaq|s&p 500/.test(lower)) return "股指期货高位震荡等待确认";
+  if (/treasury|yield|rates|fed|inflation/.test(lower)) return "利率与通胀预期影响资金风格";
+  if (/ipo|openai|spacex|anthropic/.test(lower)) return "AI IPO 预期继续升温";
+  if (/earnings|reports|results|revenue/.test(lower)) return "业绩结果进入市场定价";
+  if (/price target|upgrade|raises/.test(lower)) return "目标价上调强化买盘预期";
+  if (/downgrade|cut/.test(lower)) return "评级下修压制风险偏好";
+
+  return "事件催化进入盘前定价";
+}
+
+function makeReadableChineseNewsTitle({ ticker, type, originalTitle }) {
+  const symbol = ticker && ticker !== "MACRO" ? ticker : "MACRO";
+  return `${symbol}｜${translateEnglishTitleToChineseEvent(originalTitle, symbol, type)}`;
 }
 
 function rewriteNewsSummary(ticker, type, bias) {
