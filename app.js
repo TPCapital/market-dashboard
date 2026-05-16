@@ -1086,7 +1086,7 @@ function render(dashboard) {
   const [chaseVerdict, chaseReason] = sentimentVerdict(dashboard.sentiment, dashboard.retail);
 
   document.body.dataset.risk = dashboard.risk.mode.toLowerCase();
-  text("#riskMode", displayRiskMode(dashboard.risk.mode));
+  text("#riskMode", displayRiskModeHero(dashboard.risk.mode));
   text("#riskScore", dashboard.risk.score);
   text("#riskConclusion", dashboard.risk.conclusion);
   text("#strategyText", dashboard.strategy);
@@ -1170,6 +1170,13 @@ function displayRiskMode(mode) {
   if (mode === "Risk-On") return "风险偏好开启（Risk-On）";
   if (mode === "Risk-Off") return "风险规避（Risk-Off）";
   if (mode === "Neutral") return "中性（Neutral）";
+  return mode || "--";
+}
+
+function displayRiskModeHero(mode) {
+  if (mode === "Risk-On") return "风险偏好";
+  if (mode === "Risk-Off") return "风险规避";
+  if (mode === "Neutral") return "中性";
   return mode || "--";
 }
 
