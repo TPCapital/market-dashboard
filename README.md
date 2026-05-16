@@ -4,10 +4,9 @@
 
 ## 数据诚信规则
 
-- 前端每 60 秒刷新一次；服务端快照与 Cron 按 `vercel.json` 配置执行。
-- 页面打开时始终主动请求 `/api/snapshot?ts=Date.now()`，不会只依赖 Vercel Cron。
+- 前端每 60 秒刷新一次，并在页面打开时主动请求 `/api/snapshot?ts=Date.now()`。
+- `vercel.json` 当前不配置定时任务，适配 Vercel Hobby 免费版；刷新主要由页面请求触发。
 - `/api/snapshot` 使用 `no-store` 响应头，避免 Vercel 或浏览器复用旧快照。
-- Vercel Hobby 计划可能不保证高频 Cron 执行；Cron 只用于辅助预热，实时刷新以页面请求 `/api/snapshot` 为主。
 - Yahoo / Reddit / TradingView 可显示 `LIVE` 或 `DELAYED`；Finviz、Benzinga、X Macro、Unusual Whales 在未接入真实授权 API 前统一显示 `PROXY` 或 `SNAPSHOT`。
 - 如果多源行情失败，SPY、QQQ、NDX、VIX、TNX、DXY、GOLD 使用最近结构快照，不显示 0，不显示 Yahoo waiting。
 - 盘前异动榜优先使用新闻/异动源；如果 movers 为空，自动从 Yahoo quotes 按涨跌幅绝对值生成；quotes 也为空时使用 snapshot movers。
@@ -48,15 +47,6 @@ Vercel 设置建议：
 - Build Command: 留空，或使用 `vercel.json` 中的默认命令
 - Output Directory: 留空，或由 `vercel.json` 的 `outputDirectory: "."` 接管
 - Production Branch: `main`
-
-## Vercel Cron
-
-`vercel.json` 配置：
-
-- 美股盘前与盘中窗口：UTC `8-21` 点，每 15 分钟辅助刷新。
-- 其它时间：每 6 小时低频刷新。
-
-Hobby 计划可能限制 Cron 频率或不保证准点执行，因此页面打开时仍会主动刷新 `/api/snapshot`。
 
 ## 数据源隔离
 

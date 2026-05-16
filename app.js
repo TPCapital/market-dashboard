@@ -408,6 +408,9 @@ async function refreshSequentially() {
   const sources = (await loadServerSnapshot().catch((error) => {
     console.warn("server snapshot fallback", error);
     return null;
+  })) || (await loadAllSources().catch((error) => {
+    console.warn("direct source fallback", error);
+    return null;
   })) || loadCachedSources() || fallbackSources();
   render(buildDashboard(sources));
 }
@@ -456,6 +459,7 @@ function fallbackSource(key, data) {
 function buildDashboard(sources) {
   const benzingaData = sources.benzinga?.data || {};
   const yahooQuotes = sources.yahoo?.data?.quotes || fallback.yahoo.quotes;
+  const marketIndices = sanitizeIndices(sources.yahoo?.data?.indices);
   const quoteMap = new Map(yahooQuotes.map((item) => [item.symbol, item]));
   const flows = normalizeSectors(sources.finviz.data);
   const moversRaw = Array.isArray(benzingaData.movers) && benzingaData.movers.length
@@ -465,13 +469,13 @@ function buildDashboard(sources) {
   const stars = normalizeStars(sources.tradingView.data, quoteMap);
   const retail = sources.reddit.data;
   const options = sources.unusualWhales.data;
-  const risk = calculateRiskRegime(sources.yahoo.data.indices, sources.sentiment, retail);
-  const opportunities = calculatePremarketOpportunities(sources.yahoo.data.quotes, {
+  const risk = calculateRiskRegime(marketIndices, sources.sentiment, retail);
+  const opportunities = calculatePremarketOpportunities(yahooQuotes, {
     flows,
     news: sources.benzinga.data.news,
     retail,
     risk,
-    indices: sources.yahoo.data.indices,
+    indices: marketIndices,
     options
   });
   const tradePlan = buildPremarketTradePlan(opportunities, flows, risk, options);
@@ -505,7 +509,7 @@ function buildDashboard(sources) {
       options: statusGroup([sources.unusualWhales]),
       source: sourceBasis
     },
-    indices: sources.yahoo.data.indices,
+    indices: marketIndices,
     sentiment: sources.sentiment,
     macro: sources.xMacro.data,
     retail,
@@ -518,11 +522,29 @@ function buildDashboard(sources) {
     stars,
     news: normalizeNews(sources.benzinga.data.news),
     risk,
-    marketSummary: marketSummary(sources.yahoo.data.indices),
+    marketSummary: marketSummary(marketIndices),
     strategy,
     strategyContext: `${dataBasisLabel(strategyBasis)}。${strategyContext}`,
     tape: tapeRead(movers, flows)
   };
+}
+
+function sanitizeIndices(indices = []) {
+  const fallbackById = new Map(fallback.yahoo.indices.map((item) => [item.id, item]));
+  const byId = new Map((indices || []).map((item) => [item.id, item]));
+  return fallback.yahoo.indices.map((fallbackMetric) => {
+    const live = byId.get(fallbackMetric.id);
+    const value = Number(live?.value);
+    if (!Number.isFinite(value) || value <= 0) {
+      return {
+        ...fallbackMetric,
+        value: fallbackById.get(fallbackMetric.id)?.value || fallbackMetric.value,
+        change: fallbackById.get(fallbackMetric.id)?.change ?? fallbackMetric.change,
+        note: fallbackMetric.note?.startsWith("SNAPSHOT") ? fallbackMetric.note : "SNAPSHOT：实时源暂不可用，使用结构快照。"
+      };
+    }
+    return live;
+  });
 }
 
 function sourceModeLabel(sources) {
