@@ -496,6 +496,13 @@ function isTradableQuality(dataQuality, updatedAt) {
   return false;
 }
 
+function isUsableForInference(item) {
+  if (!item) return false;
+  if (item.isTradable) return true;
+  if (["snapshot", "cached", "proxy", "delayed", "live"].includes(normalizeDataQuality(item.dataQuality || item.status))) return true;
+  return false;
+}
+
 function enrichSources(rawSources) {
   return Object.fromEntries(Object.entries(rawSources).map(([key, source]) => {
     if (key === "sentiment") return [key, source];
@@ -515,7 +522,7 @@ function enrichSources(rawSources) {
 
 function qualityTimestamp(dataQuality, updatedAt) {
   if (updatedAt && dataQuality !== "snapshot") return formatClock(updatedAt);
-  if (dataQuality === "snapshot") return "不参与评分";
+  if (dataQuality === "snapshot") return "低置信度";
   if (dataQuality === "unavailable") return "数据不可用";
   return "--";
 }
@@ -550,7 +557,7 @@ function normalizeQuotes(quotes = [], source) {
 }
 
 function hasScoringData(items = []) {
-  return items.some((item) => item?.isTradable);
+  return items.some((item) => isUsableForInference(item));
 }
 
 function buildDashboard(sources) {
@@ -598,9 +605,9 @@ function buildDashboard(sources) {
         isTradable: value.isTradable
       })),
     moduleStatus: {
-      risk: risk.tradable ? statusGroup([sources.yahoo]) : { status: "unavailable", timestamp: "核心指数不足" },
+      risk: statusGroup([sources.yahoo]),
       index: statusGroup([sources.yahoo]),
-      sentiment: { status: "snapshot", timestamp: "不参与核心评分" },
+      sentiment: { status: "snapshot", timestamp: "低置信度代理" },
       flow: statusGroup([sources.finviz]),
       mover: statusGroup([sources.benzinga]),
       star: statusGroup([sources.tradingView]),
@@ -654,13 +661,13 @@ function sanitizeIndices(indices = [], yahooSource = {}) {
         source: "Fallback Snapshot",
         updatedAt: null,
         isTradable: false,
-        note: "快照数据（SNAPSHOT）：仅供结构参考，不参与交易评分。"
+        note: "快照数据（SNAPSHOT）：低置信度代理输入，用于维持方向判断。"
       };
     }
     const item = attachQuality(live, yahooSource, yahooSource.label, live.status || yahooSource.status);
     return {
       ...item,
-      note: item.isTradable ? item.note : "快照数据（SNAPSHOT）：仅供结构参考，不参与交易评分。"
+      note: item.isTradable ? item.note : "快照数据（SNAPSHOT）：低置信度代理输入，用于维持方向判断。"
     };
   });
 }
@@ -739,7 +746,7 @@ function statusGroup(sourceItems) {
   }
   return {
     status: "snapshot",
-    timestamp: "不参与评分"
+    timestamp: "低置信度代理"
   };
 }
 
@@ -760,15 +767,15 @@ function normalizeSectors(items = [], source = {}) {
 }
 
 function normalizeOptions(items = [], source = {}) {
-  if (!source.isTradable) {
+  if (!items?.length) {
     return [{
       symbol: "--",
       sector: "AI 期权流代理",
       score: null,
       conviction: "DATA INSUFFICIENT",
       direction: "DATA INSUFFICIENT",
-      summary: "数据不足，等待实时源恢复。本模块不使用快照生成期权方向信号。",
-      risk: "快照数据不参与交易评分。",
+      summary: "行情与代理源均为空，暂不生成期权方向信号。",
+      risk: "等待下一次数据刷新。",
       dataQuality: source.dataQuality || "snapshot",
       isTradable: false
     }];
@@ -998,15 +1005,15 @@ function normalizeNewsBias(bias = "NEUTRAL") {
 }
 
 function calculatePremarketOpportunities(quotes, context) {
-  const tradableQuotes = (quotes || []).filter((item) => item?.isTradable);
-  if (!tradableQuotes.length) {
+  const usableQuotes = (quotes || []).filter((item) => item?.symbol && isUsableForInference(item));
+  if (!usableQuotes.length) {
     return [{
       symbol: "--",
       name: "数据不足",
-      sector: "等待实时源",
+      sector: "行情源为空",
       score: null,
       confidence: "低",
-      dataBasis: "快照，不参与交易",
+      dataBasis: "API 完全不可用",
       dataQuality: "unavailable",
       isTradable: false,
       signal: "DATA INSUFFICIENT",
@@ -1014,10 +1021,10 @@ function calculatePremarketOpportunities(quotes, context) {
       vwapBias: "DATA INSUFFICIENT",
       relativeVolume: 0,
       riskTags: ["数据不足"],
-      logic: "数据不足，等待实时源恢复。"
+      logic: "行情源为空，等待下一次刷新。"
     }];
   }
-  return tradableQuotes
+  return usableQuotes
     .filter((item) => ["SPY", "QQQ", "NVDA", "AMD", "AVGO", "PLTR", "TSLA", "COIN", "MSTR", "MRVL", "MSFT", "META", "CRWD"].includes(item.symbol))
     .map((stock) => calculatePremarketOpportunityScore(stock, context))
     .sort((a, b) => b.score - a.score)
@@ -1073,18 +1080,20 @@ function calculatePremarketOpportunityScore(stock, context) {
 }
 
 function opportunityConfidence(stock, hasRealRelativeVolume, score) {
-  if (!stock.isTradable || !["live", "delayed"].includes(stock.dataQuality)) return "低";
+  if (!stock.isTradable || stock.dataQuality === "snapshot") return "低";
   if (hasRealRelativeVolume && score >= 65) return "高";
   if (hasRealRelativeVolume) return "中";
+  if (["live", "delayed"].includes(stock.dataQuality)) return "中";
   return "低";
 }
 
 function opportunityDataBasis(stock, hasRealRelativeVolume) {
-  if (!stock.isTradable) return "快照，不参与交易";
+  if (!stock.isTradable && stock.dataQuality === "snapshot") return "快照 + 代理推断";
+  if (!stock.isTradable) return "代理推断";
   if (hasRealRelativeVolume && ["live", "delayed"].includes(stock.dataQuality)) return stock.dataQuality === "live" ? "实时价格 + 真实量能" : "延迟价格 + 真实量能";
   if (["live", "delayed"].includes(stock.dataQuality)) return "延迟价格 + 代理量能";
   if (stock.dataQuality === "proxy") return "代理推断";
-  return "快照，不参与交易";
+  return "快照 + 代理推断";
 }
 
 function sectorMomentumProxy(sector) {
@@ -1110,20 +1119,15 @@ function vwapTrendProxy(stock, context, sectorMomentumScore) {
 }
 
 function classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumScore, catalyst, risk, confidence, hasRealRelativeVolume }) {
-  if (!risk.tradable || confidence !== "高" || !hasRealRelativeVolume) {
-    if (score < 50) return "LOW QUALITY / IGNORE";
-    if (gap < -1.5 || catalyst === "bearish" || (sectorMomentumScore < 45 && gap < 0)) return "PUT / HEDGE WATCH";
-    return "WATCHLIST ONLY";
-  }
   if (score < 50) return "LOW QUALITY / IGNORE";
   if (gap < -1.5 || catalyst === "bearish" || (sectorMomentumScore < 45 && gap < 0)) return "PUT / HEDGE WATCH";
-  if (score > 80 && relativeVolume > 1.5 && sectorMomentumScore >= 65 && catalyst !== "bearish" && risk.mode === "Risk-On") return "HIGH MOMENTUM LONG";
-  if (score >= 65) return "OPENING BREAKOUT WATCH";
+  if (confidence === "高" && hasRealRelativeVolume && score > 80 && relativeVolume > 1.5 && sectorMomentumScore >= 65 && catalyst !== "bearish" && risk.mode === "Risk-On") return "HIGH MOMENTUM LONG";
+  if (score >= 72) return "OPENING BREAKOUT WATCH";
+  if (score >= 60) return "HIGH MOMENTUM WATCH";
   return "LOW QUALITY / IGNORE";
 }
 
 function openingConfirmationState({ relativeVolume, gap, vwapBias, sectorMomentumScore, risk, indices, hasRealRelativeVolume }) {
-  if (!risk.tradable || !hasRealRelativeVolume) return "EARLY ONLY";
   const spy = (indices || []).find((item) => item.id === "SPY")?.change || 0;
   const qqq = (indices || []).find((item) => item.id === "QQQ" || item.id === "NDX")?.change || 0;
   if (gap > 1.5 && vwapBias === "WEAK BELOW VWAP") return "FAILED OPEN";
@@ -1145,6 +1149,7 @@ function opportunityRiskTags({ gap, relativeVolume, mentionCount, score, opening
 function opportunityLogic(stock, signal, sectorMomentumScore, relativeVolume, catalyst) {
   if (signal === "HIGH MOMENTUM LONG") return `${stock.sector}主线强化，量能与板块同步，优先等待 VWAP 回踩延续。`;
   if (signal === "OPENING BREAKOUT WATCH") return `${stock.sector}有催化和动量，但需确认开盘相对成交量。`;
+  if (signal === "HIGH MOMENTUM WATCH") return `${stock.sector}动量结构活跃，当前基于代理推断与延迟数据生成。`;
   if (signal === "PUT / HEDGE WATCH") return `${stock.sector}或价格结构偏弱，短线更适合观察对冲方向。`;
   if (relativeVolume < 1) return "量能不足，暂不追逐盘前异动。";
   if (catalyst === "bullish" || sectorMomentumScore >= 65) return "存在主题热度，但交易质量仍需开盘确认。";
@@ -1152,22 +1157,23 @@ function opportunityLogic(stock, signal, sectorMomentumScore, relativeVolume, ca
 }
 
 function buildPremarketTradePlan(opportunities, flows, risk, options) {
-  if (!risk.tradable || !opportunities.some((item) => item.isTradable)) {
+  const usableOpportunities = opportunities.filter((item) => item.symbol && item.symbol !== "--");
+  if (!usableOpportunities.length) {
     return {
-      title: "数据不足，等待实时源恢复。",
-      body: "核心行情或真实量能不足，系统暂不生成方向性交易计划。",
-      focus: ["等待 SPY / QQQ / VIX 与个股量能恢复"],
-      avoid: ["基于快照追单", "用静态数据判断开盘方向"]
+      title: "数据不足，等待下一次刷新。",
+      body: "行情源完全为空，系统暂不生成方向性交易计划。",
+      focus: ["等待下一次行情刷新"],
+      avoid: ["无数据状态下追单"]
     };
   }
   const leader = flows[0]?.sector || "AI / 高 beta";
-  const topLongs = opportunities.filter((item) => ["HIGH MOMENTUM LONG", "OPENING BREAKOUT WATCH"].includes(item.signal)).slice(0, 3);
+  const topLongs = opportunities.filter((item) => ["HIGH MOMENTUM LONG", "OPENING BREAKOUT WATCH", "HIGH MOMENTUM WATCH", "WATCHLIST ONLY"].includes(item.signal)).slice(0, 3);
   const hedges = opportunities.filter((item) => item.signal === "PUT / HEDGE WATCH").slice(0, 2);
   return {
     title: `${leader}仍是盘前主线，${displayRiskMode(risk.mode)} 下优先等开盘确认。`,
     body: risk.mode === "Risk-Off"
       ? "风险偏好转弱，降低高 beta 追涨，优先观察放量失败和对冲机会。"
-      : "市场仍可寻找顺势机会，但无量高开不追，优先交易回踩 VWAP 后重新转强的标的。",
+      : `${risk.confidence === "低" ? "当前基于代理推断与延迟数据生成。" : "市场仍可寻找顺势机会。"}无量高开不追，优先交易回踩 VWAP 后重新转强的标的。`,
     focus: topLongs.length ? topLongs.map((item) => `${item.symbol}：${displayTradeState(item.openingConfirmation)} / ${displayTradeState(item.signal)}`) : ["等待相对成交量和板块确认"],
     avoid: [
       "无量高开",
@@ -1178,7 +1184,7 @@ function buildPremarketTradePlan(opportunities, flows, risk, options) {
 }
 
 function buildScannerStatus(opportunities, flows, risk) {
-  const rvLeader = [...opportunities].filter((item) => item.isTradable).sort((a, b) => b.relativeVolume - a.relativeVolume)[0];
+  const rvLeader = [...opportunities].filter((item) => item.symbol && item.symbol !== "--").sort((a, b) => b.relativeVolume - a.relativeVolume)[0];
   const strongest = flows[0];
   const momentum = opportunities.filter((item) => item.score >= 65).length;
   const confirmed = opportunities.filter((item) => item.openingConfirmation === "CONFIRMED").length;
@@ -1193,7 +1199,8 @@ function buildScannerStatus(opportunities, flows, risk) {
 
 function marketSummary(indices) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
-  if (![byId.SPY, byId.QQQ].some((item) => item?.isTradable)) return "实时宽基行情不足，快照仅供结构参考，不参与交易评分。";
+  if (![byId.SPY, byId.QQQ].some((item) => item?.value)) return "行情源为空，等待下一次刷新。";
+  if (![byId.SPY, byId.QQQ].some((item) => item?.isTradable)) return "当前基于代理推断与延迟数据生成，方向置信度较低。";
   const techLead = (byId.QQQ?.change || 0) > (byId.SPY?.change || 0);
   const ratesPressure = (byId.TNX?.change || 0) > 0.5;
   const volRelief = (byId.VIX?.change || 0) < 0;
@@ -1211,20 +1218,27 @@ function durability(live, change) {
   return "偏事件交易，持续性待验证。";
 }
 
+function riskConfidence(nonTradableCore, core = []) {
+  if (nonTradableCore === 0) return "高";
+  if (core.filter((item) => item?.isTradable).length >= 1) return "中";
+  return "低";
+}
+
 function calculateRiskRegime(indices, sentiment, retail) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
   const core = [byId.SPY, byId.QQQ, byId.VIX];
+  const usableCore = core.filter((item) => item && Number.isFinite(Number(item.value)) && Number(item.value) > 0);
   const nonTradableCore = core.filter((item) => !item?.isTradable).length;
-  if (nonTradableCore >= 2) {
+  if (!usableCore.length) {
     return {
       score: null,
       mode: "数据不足",
       confidence: "低",
       dataQuality: "unavailable",
       tradable: false,
-      reason: "核心指数实时数据不足，等待行情源恢复。",
-      conclusion: "数据不足，等待实时指数恢复。",
-      inputs: [["SPY", byId.SPY?.isTradable ? signed(byId.SPY.change) : "数据不足"], ["QQQ", byId.QQQ?.isTradable ? signed(byId.QQQ.change) : "数据不足"], ["VIX", byId.VIX?.isTradable ? signed(byId.VIX.change) : "数据不足"], ["可信度", "低"]]
+      reason: "核心指数行情为空。",
+      conclusion: "行情源为空，等待下一次刷新。",
+      inputs: [["SPY", "数据不足"], ["QQQ", "数据不足"], ["VIX", "数据不足"], ["可信度", "低"]]
     };
   }
   const fearGreed = sentiment.find((item) => item.id === "Fear & Greed")?.value || 50;
@@ -1236,10 +1250,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
     return {
       score: 72,
       mode: "Risk-On",
-      confidence: "高",
-      dataQuality: "live",
+      confidence: riskConfidence(nonTradableCore, core),
+      dataQuality: nonTradableCore === 0 ? "live" : "proxy",
       tradable: true,
-      reason: "QQQ 上行、VIX 回落，美元与利率压力可控。",
+      reason: nonTradableCore === 0 ? "QQQ 上行、VIX 回落，美元与利率压力可控。" : "实时性不足，基于代理推断与延迟数据生成。",
       conclusion: "科技风险偏好增强，AI 半导体继续主导市场，谨慎追高，回踩优先。",
       inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
     };
@@ -1248,10 +1262,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
     return {
       score: 34,
       mode: "Risk-Off",
-      confidence: "高",
-      dataQuality: "live",
+      confidence: riskConfidence(nonTradableCore, core),
+      dataQuality: nonTradableCore === 0 ? "live" : "proxy",
       tradable: true,
-      reason: "VIX、DXY、TNX 上行且 QQQ 走弱。",
+      reason: nonTradableCore === 0 ? "VIX、DXY、TNX 上行且 QQQ 走弱。" : "实时性不足，基于代理推断与延迟数据生成。",
       conclusion: "VIX、DXY 与 TNX 同步施压，降低高 beta 暴露，等待风险释放。",
       inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
     };
@@ -1272,10 +1286,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
   return {
     score: bounded,
     mode: bounded >= 56 ? "Risk-On" : bounded <= 44 ? "Risk-Off" : "Neutral",
-    confidence: nonTradableCore === 0 ? "中" : "低",
+    confidence: riskConfidence(nonTradableCore, core),
     dataQuality: nonTradableCore === 0 ? "delayed" : "proxy",
     tradable: true,
-    reason: "核心指数可用但信号未完全共振。",
+    reason: nonTradableCore === 0 ? "核心指数可用但信号未完全共振。" : "当前基于代理推断与延迟数据生成。",
     conclusion:
       bounded >= 56
         ? "纳指强于大盘、VIX 回落，盘前风险偏好处于进攻区。"
@@ -1302,7 +1316,7 @@ function sentimentVerdict(sentiment, retail) {
 
 function strategyFrom(risk, flows, retail, options) {
   if (!risk.tradable) {
-    return ["数据不足，等待实时源恢复。", "SNAPSHOT / FALLBACK 不参与核心交易评分。"];
+    return ["数据不足，等待下一次刷新。", "行情源完全为空时不生成方向性策略。"];
   }
   const leader = flows[0]?.sector || "科技";
   const callBias = options.filter((item) => String(item.type).toLowerCase().includes("call")).length;
@@ -1319,8 +1333,11 @@ function strategyFrom(risk, flows, retail, options) {
 }
 
 function tapeRead(movers, flows) {
+  if (!movers.length && !flows.length) {
+    return { title: "数据不足", reason: "行情与板块源为空，等待下一次刷新。" };
+  }
   if (!movers.some((item) => item.isTradable) && !flows.some((item) => item.isTradable)) {
-    return { title: "数据不足", reason: "等待实时行情与热钱板块源恢复。" };
+    return { title: "代理推断模式", reason: "当前基于代理推断与延迟数据生成。" };
   }
   const leader = flows[0];
   const positive = movers.filter((item) => item.isTradable && item.change > 0).length;
@@ -1445,6 +1462,7 @@ function displayTradeState(value = "") {
     "WATCHLIST ONLY": "观察名单（Watchlist）",
     "HIGH MOMENTUM LONG": "强势做多（High Momentum Long）",
     "OPENING BREAKOUT WATCH": "开盘突破观察（Opening Breakout Watch）",
+    "HIGH MOMENTUM WATCH": "高动量观察（High Momentum Watch）",
     "PUT / HEDGE WATCH": "对冲观察（Put / Hedge Watch）",
     "PUT / HEDGE PROXY": "对冲代理（Put / Hedge Proxy）",
     "CALL MOMENTUM PROXY": "看涨动量代理（Call Momentum Proxy）",
@@ -1507,7 +1525,7 @@ function renderSources(items) {
 
 function sourceUpdatedLabel(item) {
   if (item.updatedAt) return formatDateTime(item.updatedAt);
-  if (item.dataQuality === "snapshot") return "快照数据，不参与评分";
+  if (item.dataQuality === "snapshot") return "快照 / 低置信度代理";
   return item.timestamp || "--";
 }
 
@@ -1645,7 +1663,7 @@ function renderTradePlan(plan) {
 
 function signalClass(signal) {
   if (signal === "HIGH MOMENTUM LONG") return "signal-long";
-  if (signal === "OPENING BREAKOUT WATCH") return "signal-watch";
+  if (signal === "OPENING BREAKOUT WATCH" || signal === "HIGH MOMENTUM WATCH") return "signal-watch";
   if (signal === "PUT / HEDGE WATCH") return "signal-hedge";
   return "signal-ignore";
 }
