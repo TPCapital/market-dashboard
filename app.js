@@ -2,6 +2,7 @@ const CONFIG = window.DASHBOARD_CONFIG || {};
 const REFRESH_SECONDS = CONFIG.refreshSeconds || 90;
 const CACHE_PREFIX = "ai-us-equity-dashboard:";
 const FALLBACK_SNAPSHOT_LABEL = "快照数据（SNAPSHOT）";
+const CACHE_TRADABLE_MS = 15 * 60 * 1000;
 
 const sourceCatalog = {
   yahoo: "Yahoo Finance",
@@ -147,7 +148,7 @@ function metric(id, name, value, change, note) {
 
 function quote(symbol, price, preMarketChange, volumeRatio = 1) {
   const [name, sector] = symbolMeta[symbol] || [symbol, "其他"];
-  return { symbol, name, sector, price, preMarketChange, volumeRatio };
+  return { symbol, name, sector, price, preMarketChange, volumeRatio, proxyRelativeVolume: volumeRatio };
 }
 
 function feed(source, title, summary, tone = "neutral") {
@@ -197,7 +198,7 @@ async function withFallback(sourceKey, loader, fallbackValue) {
   try {
     const data = await loader();
     const updatedAt = Date.now();
-    writeSourceCache(sourceKey, data, updatedAt);
+    writeSourceCache(sourceKey, data, updatedAt, "live");
     window.__dashboardErrors = window.__dashboardErrors || {};
     delete window.__dashboardErrors[sourceKey];
     return {
@@ -223,7 +224,7 @@ async function withFallback(sourceKey, loader, fallbackValue) {
     }
     return {
       data: fallbackValue,
-      status: "fallback",
+      status: "snapshot",
       label: sourceCatalog[sourceKey],
       updatedAt: null,
       timestamp: FALLBACK_SNAPSHOT_LABEL
@@ -231,9 +232,10 @@ async function withFallback(sourceKey, loader, fallbackValue) {
   }
 }
 
-function writeSourceCache(sourceKey, data, updatedAt) {
+function writeSourceCache(sourceKey, data, updatedAt, dataQuality = "live") {
+  if (!["live", "delayed", "proxy"].includes(normalizeDataQuality(dataQuality))) return;
   try {
-    localStorage.setItem(`${CACHE_PREFIX}${sourceKey}`, JSON.stringify({ data, updatedAt }));
+    localStorage.setItem(`${CACHE_PREFIX}${sourceKey}`, JSON.stringify({ data, updatedAt, dataQuality: normalizeDataQuality(dataQuality) }));
   } catch (error) {
     console.warn("cache write skipped", sourceKey, error);
   }
@@ -244,7 +246,7 @@ function readSourceCache(sourceKey) {
     const raw = localStorage.getItem(`${CACHE_PREFIX}${sourceKey}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed?.data || !Number.isFinite(parsed.updatedAt)) return null;
+    if (!parsed?.data || !Number.isFinite(parsed.updatedAt) || !parsed.dataQuality || normalizeDataQuality(parsed.dataQuality) === "snapshot") return null;
     return parsed;
   } catch (error) {
     console.warn("cache read skipped", sourceKey, error);
@@ -298,14 +300,27 @@ async function loadYahoo() {
   const quoteRows = Object.keys(symbolMeta).map((symbol) => {
     const row = bySymbol.get(symbol);
     const seed = fallback.yahoo.quotes.find((item) => item.symbol === symbol);
-    return quote(
+    const volume = Number(row?.regularMarketVolume || 0);
+    const averageVolume = Number(row?.averageDailyVolume3Month || 0);
+    const hasRealVolume = volume > 0 && averageVolume > 0;
+    return {
+      ...quote(
       symbol,
       row?.preMarketPrice ?? row?.regularMarketPrice ?? seed?.price ?? 0,
       row?.preMarketChangePercent ?? row?.regularMarketChangePercent ?? seed?.preMarketChange ?? 0,
-      row?.regularMarketVolume && row?.averageDailyVolume3Month
-        ? row.regularMarketVolume / row.averageDailyVolume3Month
+      hasRealVolume
+        ? volume / averageVolume
         : seed?.volumeRatio ?? 1
-    );
+      ),
+      regularMarketChangePercent: row?.regularMarketChangePercent,
+      volume,
+      averageVolume,
+      dataQuality: row ? "live" : "snapshot",
+      dataStatus: row ? "LIVE" : "SNAPSHOT",
+      isTradable: Boolean(row),
+      realRelativeVolume: hasRealVolume ? volume / averageVolume : null,
+      proxyRelativeVolume: hasRealVolume ? null : seed?.volumeRatio ?? 1
+    };
   });
 
   return { indices, quotes: quoteRows };
@@ -359,17 +374,20 @@ async function loadServerSnapshot() {
   const json = await fetchJson(`${url}${joiner}ts=${Date.now()}`);
   const sources = fallbackSources();
   for (const [key, value] of Object.entries(json.sources || {})) {
-    if (!sources[key] || !["live", "delayed", "proxy", "cached", "fallback"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
-    const updatedAt = Number(value.updatedAt || json.generatedAt || Date.now());
+    if (!sources[key] || !["live", "delayed", "proxy", "cached", "fallback", "snapshot", "unavailable"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
     const status = json.servedFrom === "last-success" || value.status === "cached" ? "cached" : value.status;
+    const dataQuality = normalizeDataQuality(status);
+    const updatedAt = dataQuality === "snapshot"
+      ? null
+      : Number(value.updatedAt || json.generatedAt || Date.now());
     sources[key] = {
       data: value.data,
       status,
       label: value.label || sourceCatalog[key],
       updatedAt,
-      timestamp: ["live", "delayed", "proxy"].includes(status) ? formatClock(updatedAt) : status === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "SNAPSHOT"
+      timestamp: ["live", "delayed", "proxy"].includes(dataQuality) ? formatClock(updatedAt) : dataQuality === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "SNAPSHOT"
     };
-    writeSourceCache(key, value.data, updatedAt);
+    writeSourceCache(key, value.data, updatedAt, status);
   }
   return sources;
 }
@@ -424,6 +442,8 @@ function loadCachedSources() {
     sources[key] = {
       data: cached.data,
       status: "cached",
+      dataQuality: "cached",
+      originalDataQuality: cached.dataQuality,
       label: sourceCatalog[key],
       updatedAt: cached.updatedAt,
       timestamp: `最后成功 ${formatDateTime(cached.updatedAt)}`
@@ -449,31 +469,111 @@ function fallbackSources() {
 function fallbackSource(key, data) {
   return {
     data,
-    status: "fallback",
+    status: "snapshot",
     label: sourceCatalog[key],
     updatedAt: null,
     timestamp: FALLBACK_SNAPSHOT_LABEL
   };
 }
 
+function normalizeDataQuality(status = "") {
+  const value = String(status || "").toLowerCase();
+  if (value === "live") return "live";
+  if (value === "delayed") return "delayed";
+  if (value === "proxy") return "proxy";
+  if (value === "cached") return "cached";
+  if (value === "unavailable") return "unavailable";
+  if (value === "fallback" || value === "snapshot" || value === "snapshot only") return "snapshot";
+  if (String(status).toUpperCase() === "LIVE") return "live";
+  if (String(status).toUpperCase() === "DELAYED") return "delayed";
+  if (String(status).toUpperCase() === "SNAPSHOT") return "snapshot";
+  return "snapshot";
+}
+
+function isTradableQuality(dataQuality, updatedAt) {
+  if (dataQuality === "live" || dataQuality === "delayed" || dataQuality === "proxy") return true;
+  if (dataQuality === "cached") return Number.isFinite(updatedAt) && Date.now() - updatedAt <= CACHE_TRADABLE_MS;
+  return false;
+}
+
+function enrichSources(rawSources) {
+  return Object.fromEntries(Object.entries(rawSources).map(([key, source]) => {
+    if (key === "sentiment") return [key, source];
+    const dataQuality = normalizeDataQuality(source?.status);
+    const updatedAt = Number(source?.updatedAt || 0) || null;
+    const isTradable = isTradableQuality(dataQuality, updatedAt);
+    return [key, {
+      ...source,
+      status: dataQuality,
+      dataQuality,
+      updatedAt,
+      isTradable,
+      timestamp: source?.timestamp || qualityTimestamp(dataQuality, updatedAt)
+    }];
+  }));
+}
+
+function qualityTimestamp(dataQuality, updatedAt) {
+  if (updatedAt && dataQuality !== "snapshot") return formatClock(updatedAt);
+  if (dataQuality === "snapshot") return "不参与评分";
+  if (dataQuality === "unavailable") return "数据不可用";
+  return "--";
+}
+
+function attachQuality(item, source, sourceName, overrideStatus) {
+  const dataQuality = normalizeDataQuality(overrideStatus || item?.dataQuality || item?.status || source?.dataQuality || source?.status);
+  const updatedAt = Number(item?.updatedAt || source?.updatedAt || 0) || null;
+  const isTradable = isTradableQuality(dataQuality, updatedAt) && dataQuality !== "snapshot";
+  return {
+    ...item,
+    dataQuality,
+    updatedAt,
+    source: item?.source || sourceName || source?.label || "Unknown",
+    isTradable
+  };
+}
+
+function normalizeQuotes(quotes = [], source) {
+  return (quotes || []).map((item) => {
+    const volume = Number(item.volume || item.regularMarketVolume || 0);
+    const averageVolume = Number(item.averageVolume || item.averageDailyVolume3Month || 0);
+    const realRelativeVolume = volume > 0 && averageVolume > 0 ? volume / averageVolume : Number(item.realRelativeVolume || 0) || null;
+    const proxyRelativeVolume = realRelativeVolume ? null : Number(item.proxyRelativeVolume ?? item.relativeVolume ?? item.volumeRatio ?? 1);
+    return attachQuality({
+      ...item,
+      volumeRatio: realRelativeVolume || proxyRelativeVolume || 1,
+      relativeVolume: realRelativeVolume || proxyRelativeVolume || 1,
+      realRelativeVolume,
+      proxyRelativeVolume
+    }, source, source?.label);
+  });
+}
+
+function hasScoringData(items = []) {
+  return items.some((item) => item?.isTradable);
+}
+
 function buildDashboard(sources) {
+  sources = enrichSources(sources);
   const benzingaData = sources.benzinga?.data || {};
-  const yahooQuotes = sources.yahoo?.data?.quotes || fallback.yahoo.quotes;
-  const marketIndices = sanitizeIndices(sources.yahoo?.data?.indices);
+  const yahooQuotes = normalizeQuotes(sources.yahoo?.data?.quotes || fallback.yahoo.quotes, sources.yahoo);
+  const marketIndices = sanitizeIndices(sources.yahoo?.data?.indices, sources.yahoo);
   const quoteMap = new Map(yahooQuotes.map((item) => [item.symbol, item]));
-  const flows = normalizeSectors(sources.finviz.data);
+  const flows = normalizeSectors(sources.finviz.data, sources.finviz);
   const moversRaw = Array.isArray(benzingaData.movers) && benzingaData.movers.length
     ? benzingaData.movers
     : deriveMoversFromQuotes(yahooQuotes);
   const movers = normalizeMovers(moversRaw, quoteMap, yahooQuotes);
   const stars = normalizeStars(sources.tradingView.data, quoteMap);
   const retail = sources.reddit.data;
-  const options = sources.unusualWhales.data;
+  const newsItems = Array.isArray(sources.benzinga?.data?.news) ? sources.benzinga.data.news : [];
+  const newsForScoring = sources.benzinga?.isTradable ? newsItems : [];
+  const options = normalizeOptions(sources.unusualWhales.data, sources.unusualWhales);
   const risk = calculateRiskRegime(marketIndices, sources.sentiment, retail);
   const opportunities = calculatePremarketOpportunities(yahooQuotes, {
     flows,
-    news: sources.benzinga.data.news,
-    retail,
+    news: newsForScoring,
+    retail: sources.reddit?.isTradable ? retail : {},
     risk,
     indices: marketIndices,
     options
@@ -484,7 +584,7 @@ function buildDashboard(sources) {
   const sourceBasis = statusGroup(Object.values(sources).filter((source) => source?.status));
 
   return {
-    asOf: `数据生成 ${sourceBasis.fullTimestamp || sourceBasis.timestamp} · 页面刷新 ${formatDateTime(Date.now())}`,
+    asOf: `数据生成：${latestDataTimestamp(sources)} · 页面刷新：${formatDateTime(Date.now())}`,
     sourceMode: sourceModeLabel(sources),
     sourceStatus: Object.entries(sources)
       .filter(([key]) => key !== "sentiment")
@@ -492,12 +592,15 @@ function buildDashboard(sources) {
         key,
         label: value.label,
         status: value.status,
-        timestamp: value.timestamp || "备用快照"
+        timestamp: value.timestamp || "备用快照",
+        updatedAt: value.updatedAt,
+        dataQuality: value.dataQuality,
+        isTradable: value.isTradable
       })),
     moduleStatus: {
-      risk: statusGroup([sources.yahoo]),
+      risk: risk.tradable ? statusGroup([sources.yahoo]) : { status: "unavailable", timestamp: "核心指数不足" },
       index: statusGroup([sources.yahoo]),
-      sentiment: { status: "fallback", timestamp: FALLBACK_SNAPSHOT_LABEL },
+      sentiment: { status: "snapshot", timestamp: "不参与核心评分" },
       flow: statusGroup([sources.finviz]),
       mover: statusGroup([sources.benzinga]),
       star: statusGroup([sources.tradingView]),
@@ -520,7 +623,7 @@ function buildDashboard(sources) {
     flows,
     movers,
     stars,
-    news: normalizeNews(sources.benzinga.data.news),
+    news: normalizeNews(newsItems),
     risk,
     marketSummary: marketSummary(marketIndices),
     strategy,
@@ -529,7 +632,14 @@ function buildDashboard(sources) {
   };
 }
 
-function sanitizeIndices(indices = []) {
+function latestDataTimestamp(sources) {
+  const usable = Object.values(sources)
+    .filter((source) => source?.updatedAt && ["live", "delayed", "proxy", "cached"].includes(source.dataQuality))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return usable[0] ? formatDateTime(usable[0].updatedAt) : "无可用实时数据";
+}
+
+function sanitizeIndices(indices = [], yahooSource = {}) {
   const fallbackById = new Map(fallback.yahoo.indices.map((item) => [item.id, item]));
   const byId = new Map((indices || []).map((item) => [item.id, item]));
   return fallback.yahoo.indices.map((fallbackMetric) => {
@@ -540,10 +650,18 @@ function sanitizeIndices(indices = []) {
         ...fallbackMetric,
         value: fallbackById.get(fallbackMetric.id)?.value || fallbackMetric.value,
         change: fallbackById.get(fallbackMetric.id)?.change ?? fallbackMetric.change,
-        note: fallbackMetric.note?.includes("SNAPSHOT") ? fallbackMetric.note : "快照数据（SNAPSHOT）：实时源暂不可用，使用结构快照。"
+        dataQuality: "snapshot",
+        source: "Fallback Snapshot",
+        updatedAt: null,
+        isTradable: false,
+        note: "快照数据（SNAPSHOT）：仅供结构参考，不参与交易评分。"
       };
     }
-    return live;
+    const item = attachQuality(live, yahooSource, yahooSource.label, live.status || yahooSource.status);
+    return {
+      ...item,
+      note: item.isTradable ? item.note : "快照数据（SNAPSHOT）：仅供结构参考，不参与交易评分。"
+    };
   });
 }
 
@@ -553,6 +671,7 @@ function sourceModeLabel(sources) {
   if (statuses.some((status) => status === "delayed")) return "延迟 + 结构化情报";
   if (statuses.some((status) => status === "proxy")) return "代理推断情报";
   if (statuses.some((status) => status === "cached")) return "上次成功数据";
+  if (statuses.some((status) => status === "unavailable")) return "数据不足";
   return "快照数据";
 }
 
@@ -619,21 +738,60 @@ function statusGroup(sourceItems) {
     };
   }
   return {
-    status: "fallback",
-    timestamp: FALLBACK_SNAPSHOT_LABEL
+    status: "snapshot",
+    timestamp: "不参与评分"
   };
 }
 
-function normalizeSectors(items) {
-  return items
+function normalizeSectors(items = [], source = {}) {
+  return (items || [])
     .map((item) => ({
       sector: item.sector || item.name,
       score: clamp(Math.round(item.score ?? 50 + (item.change || 0) * 15)),
       change: item.change ?? 0,
-      summary: item.summary || item.note || "板块热度来自 Finviz Heatmap。"
+      summary: item.summary || item.note || "板块热度来自 Finviz Heatmap。",
+      dataQuality: source.dataQuality || "snapshot",
+      isTradable: Boolean(source.isTradable),
+      source: source.label || "Sector Heat Proxy",
+      updatedAt: source.updatedAt || null
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 6);
+}
+
+function normalizeOptions(items = [], source = {}) {
+  if (!source.isTradable) {
+    return [{
+      symbol: "--",
+      sector: "AI 期权流代理",
+      score: null,
+      conviction: "DATA INSUFFICIENT",
+      direction: "DATA INSUFFICIENT",
+      summary: "数据不足，等待实时源恢复。本模块不使用快照生成期权方向信号。",
+      risk: "快照数据不参与交易评分。",
+      dataQuality: source.dataQuality || "snapshot",
+      isTradable: false
+    }];
+  }
+  return (items || []).map((item) => {
+    const rawState = item.conviction || item.direction || item.type || "WATCHLIST";
+    const downgraded = rawState === "HIGH CONVICTION"
+      ? "MOMENTUM"
+      : rawState === "CALL MOMENTUM PROXY"
+        ? "MOMENTUM"
+        : rawState === "PUT / HEDGE PROXY"
+          ? "PUT / HEDGE WATCH"
+          : rawState;
+    return {
+      ...item,
+      conviction: downgraded,
+      direction: downgraded,
+      dataQuality: source.dataQuality || "proxy",
+      isTradable: Boolean(source.isTradable),
+      summary: `${item.summary || "基于免费数据生成代理方向。"}（代理推断，不是真实期权大单）`,
+      risk: item.risk || "风险：代理信号只作辅助，需等待开盘量价确认。"
+    };
+  }).slice(0, 6);
 }
 
 function normalizeMovers(items = [], quoteMap, quotes = []) {
@@ -651,9 +809,11 @@ function normalizeMovers(items = [], quoteMap, quotes = []) {
         name: item.name || name,
         sector: item.sector || sectorName,
         change,
-        reason: item.reason || item.summary || "Benzinga 异动新闻待确认。",
+        reason: item.reason || item.summary || "异动新闻待确认。",
         bias: item.bias || (change >= 0 ? "利好" : "利空"),
-        durability: durability(live, change)
+        durability: live?.isTradable ? durability(live, change) : "快照数据，仅供参考。",
+        dataQuality: live?.dataQuality || "snapshot",
+        isTradable: Boolean(live?.isTradable)
       };
     })
     .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
@@ -838,7 +998,26 @@ function normalizeNewsBias(bias = "NEUTRAL") {
 }
 
 function calculatePremarketOpportunities(quotes, context) {
-  return (quotes || [])
+  const tradableQuotes = (quotes || []).filter((item) => item?.isTradable);
+  if (!tradableQuotes.length) {
+    return [{
+      symbol: "--",
+      name: "数据不足",
+      sector: "等待实时源",
+      score: null,
+      confidence: "低",
+      dataBasis: "快照，不参与交易",
+      dataQuality: "unavailable",
+      isTradable: false,
+      signal: "DATA INSUFFICIENT",
+      openingConfirmation: "DATA INSUFFICIENT",
+      vwapBias: "DATA INSUFFICIENT",
+      relativeVolume: 0,
+      riskTags: ["数据不足"],
+      logic: "数据不足，等待实时源恢复。"
+    }];
+  }
+  return tradableQuotes
     .filter((item) => ["SPY", "QQQ", "NVDA", "AMD", "AVGO", "PLTR", "TSLA", "COIN", "MSTR", "MRVL", "MSFT", "META", "CRWD"].includes(item.symbol))
     .map((stock) => calculatePremarketOpportunityScore(stock, context))
     .sort((a, b) => b.score - a.score)
@@ -852,7 +1031,10 @@ function calculatePremarketOpportunityScore(stock, context) {
   const sector = stock.sector || "其他";
   const gap = Number(stock.preMarketChangePercent ?? stock.preMarketChange ?? stock.regularMarketChangePercent ?? 0);
   const regularChange = Number(stock.regularMarketChangePercent ?? gap);
-  const relativeVolume = Number(stock.relativeVolume ?? stock.volumeRatio ?? 1);
+  const hasRealRelativeVolume = Number.isFinite(stock.realRelativeVolume) && stock.realRelativeVolume > 0;
+  const relativeVolume = hasRealRelativeVolume
+    ? Number(stock.realRelativeVolume)
+    : Number(stock.proxyRelativeVolume ?? stock.relativeVolume ?? stock.volumeRatio ?? 1);
   const sectorMomentumScore = flowMap.get(sector)?.score ?? sectorMomentumProxy(sector);
   const mentionCount = Number(mentionMap.get(stock.symbol) || 0);
   const retailHeat = clamp(Math.round(mentionCount * 6 + (context.retail?.score || 50) * 0.35));
@@ -865,14 +1047,19 @@ function calculatePremarketOpportunityScore(stock, context) {
   const newsScore = catalyst === "bullish" ? 10 : catalyst === "bearish" ? 7 : 5;
   const retailScore = clamp(retailHeat) * 0.1;
   const score = clamp(Math.round(gapScore + volumeScore + vwapScore + sectorScore + newsScore + retailScore));
-  const signal = classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumScore, catalyst, risk: context.risk });
-  const openingConfirmation = openingConfirmationState({ relativeVolume, gap, vwapBias, sectorMomentumScore, risk: context.risk, indices: context.indices });
+  const confidence = opportunityConfidence(stock, hasRealRelativeVolume, score);
+  const signal = classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumScore, catalyst, risk: context.risk, confidence, hasRealRelativeVolume });
+  const openingConfirmation = openingConfirmationState({ relativeVolume, gap, vwapBias, sectorMomentumScore, risk: context.risk, indices: context.indices, hasRealRelativeVolume });
   const riskTags = opportunityRiskTags({ gap, relativeVolume, mentionCount, score, openingConfirmation, signal });
   return {
     symbol: stock.symbol,
     name: stock.name,
     sector,
     score,
+    confidence,
+    dataBasis: opportunityDataBasis(stock, hasRealRelativeVolume),
+    dataQuality: stock.dataQuality,
+    isTradable: Boolean(stock.isTradable),
     signal,
     openingConfirmation,
     vwapBias,
@@ -883,6 +1070,21 @@ function calculatePremarketOpportunityScore(stock, context) {
     riskTags,
     logic: opportunityLogic(stock, signal, sectorMomentumScore, relativeVolume, catalyst)
   };
+}
+
+function opportunityConfidence(stock, hasRealRelativeVolume, score) {
+  if (!stock.isTradable || !["live", "delayed"].includes(stock.dataQuality)) return "低";
+  if (hasRealRelativeVolume && score >= 65) return "高";
+  if (hasRealRelativeVolume) return "中";
+  return "低";
+}
+
+function opportunityDataBasis(stock, hasRealRelativeVolume) {
+  if (!stock.isTradable) return "快照，不参与交易";
+  if (hasRealRelativeVolume && ["live", "delayed"].includes(stock.dataQuality)) return stock.dataQuality === "live" ? "实时价格 + 真实量能" : "延迟价格 + 真实量能";
+  if (["live", "delayed"].includes(stock.dataQuality)) return "延迟价格 + 代理量能";
+  if (stock.dataQuality === "proxy") return "代理推断";
+  return "快照，不参与交易";
 }
 
 function sectorMomentumProxy(sector) {
@@ -907,7 +1109,12 @@ function vwapTrendProxy(stock, context, sectorMomentumScore) {
   return "VWAP WATCH";
 }
 
-function classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumScore, catalyst, risk }) {
+function classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumScore, catalyst, risk, confidence, hasRealRelativeVolume }) {
+  if (!risk.tradable || confidence !== "高" || !hasRealRelativeVolume) {
+    if (score < 50) return "LOW QUALITY / IGNORE";
+    if (gap < -1.5 || catalyst === "bearish" || (sectorMomentumScore < 45 && gap < 0)) return "PUT / HEDGE WATCH";
+    return "WATCHLIST ONLY";
+  }
   if (score < 50) return "LOW QUALITY / IGNORE";
   if (gap < -1.5 || catalyst === "bearish" || (sectorMomentumScore < 45 && gap < 0)) return "PUT / HEDGE WATCH";
   if (score > 80 && relativeVolume > 1.5 && sectorMomentumScore >= 65 && catalyst !== "bearish" && risk.mode === "Risk-On") return "HIGH MOMENTUM LONG";
@@ -915,7 +1122,8 @@ function classifyOpportunitySignal({ score, gap, relativeVolume, sectorMomentumS
   return "LOW QUALITY / IGNORE";
 }
 
-function openingConfirmationState({ relativeVolume, gap, vwapBias, sectorMomentumScore, risk, indices }) {
+function openingConfirmationState({ relativeVolume, gap, vwapBias, sectorMomentumScore, risk, indices, hasRealRelativeVolume }) {
+  if (!risk.tradable || !hasRealRelativeVolume) return "EARLY ONLY";
   const spy = (indices || []).find((item) => item.id === "SPY")?.change || 0;
   const qqq = (indices || []).find((item) => item.id === "QQQ" || item.id === "NDX")?.change || 0;
   if (gap > 1.5 && vwapBias === "WEAK BELOW VWAP") return "FAILED OPEN";
@@ -944,6 +1152,14 @@ function opportunityLogic(stock, signal, sectorMomentumScore, relativeVolume, ca
 }
 
 function buildPremarketTradePlan(opportunities, flows, risk, options) {
+  if (!risk.tradable || !opportunities.some((item) => item.isTradable)) {
+    return {
+      title: "数据不足，等待实时源恢复。",
+      body: "核心行情或真实量能不足，系统暂不生成方向性交易计划。",
+      focus: ["等待 SPY / QQQ / VIX 与个股量能恢复"],
+      avoid: ["基于快照追单", "用静态数据判断开盘方向"]
+    };
+  }
   const leader = flows[0]?.sector || "AI / 高 beta";
   const topLongs = opportunities.filter((item) => ["HIGH MOMENTUM LONG", "OPENING BREAKOUT WATCH"].includes(item.signal)).slice(0, 3);
   const hedges = opportunities.filter((item) => item.signal === "PUT / HEDGE WATCH").slice(0, 2);
@@ -962,14 +1178,14 @@ function buildPremarketTradePlan(opportunities, flows, risk, options) {
 }
 
 function buildScannerStatus(opportunities, flows, risk) {
-  const rvLeader = [...opportunities].sort((a, b) => b.relativeVolume - a.relativeVolume)[0];
+  const rvLeader = [...opportunities].filter((item) => item.isTradable).sort((a, b) => b.relativeVolume - a.relativeVolume)[0];
   const strongest = flows[0];
   const momentum = opportunities.filter((item) => item.score >= 65).length;
   const confirmed = opportunities.filter((item) => item.openingConfirmation === "CONFIRMED").length;
   return {
     rvLeader: rvLeader ? `相对成交量龙头 ${rvLeader.symbol} ${rvLeader.relativeVolume.toFixed(2)}x` : "相对成交量龙头 --",
     strongestSector: strongest ? `最强板块 ${strongest.sector}` : "最强板块 --",
-    riskAppetite: `风险偏好 ${displayRiskMode(risk.mode)}`,
+    riskAppetite: `风险偏好 ${displayRiskMode(risk.mode)} · 置信度 ${risk.confidence || "低"}`,
     premarketMomentum: `盘前动量 ${momentum} 个观察名单`,
     openingBias: confirmed ? `开盘倾向 ${confirmed} 个已确认` : "开盘倾向 仅早盘观察"
   };
@@ -977,6 +1193,7 @@ function buildScannerStatus(opportunities, flows, risk) {
 
 function marketSummary(indices) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
+  if (![byId.SPY, byId.QQQ].some((item) => item?.isTradable)) return "实时宽基行情不足，快照仅供结构参考，不参与交易评分。";
   const techLead = (byId.QQQ?.change || 0) > (byId.SPY?.change || 0);
   const ratesPressure = (byId.TNX?.change || 0) > 0.5;
   const volRelief = (byId.VIX?.change || 0) < 0;
@@ -996,6 +1213,20 @@ function durability(live, change) {
 
 function calculateRiskRegime(indices, sentiment, retail) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
+  const core = [byId.SPY, byId.QQQ, byId.VIX];
+  const nonTradableCore = core.filter((item) => !item?.isTradable).length;
+  if (nonTradableCore >= 2) {
+    return {
+      score: null,
+      mode: "数据不足",
+      confidence: "低",
+      dataQuality: "unavailable",
+      tradable: false,
+      reason: "核心指数实时数据不足，等待行情源恢复。",
+      conclusion: "数据不足，等待实时指数恢复。",
+      inputs: [["SPY", byId.SPY?.isTradable ? signed(byId.SPY.change) : "数据不足"], ["QQQ", byId.QQQ?.isTradable ? signed(byId.QQQ.change) : "数据不足"], ["VIX", byId.VIX?.isTradable ? signed(byId.VIX.change) : "数据不足"], ["可信度", "低"]]
+    };
+  }
   const fearGreed = sentiment.find((item) => item.id === "Fear & Greed")?.value || 50;
   const qqq = byId.QQQ?.change || byId.NDX?.change || 0;
   const vix = byId.VIX?.change || 0;
@@ -1005,6 +1236,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
     return {
       score: 72,
       mode: "Risk-On",
+      confidence: "高",
+      dataQuality: "live",
+      tradable: true,
+      reason: "QQQ 上行、VIX 回落，美元与利率压力可控。",
       conclusion: "科技风险偏好增强，AI 半导体继续主导市场，谨慎追高，回踩优先。",
       inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
     };
@@ -1013,6 +1248,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
     return {
       score: 34,
       mode: "Risk-Off",
+      confidence: "高",
+      dataQuality: "live",
+      tradable: true,
+      reason: "VIX、DXY、TNX 上行且 QQQ 走弱。",
       conclusion: "VIX、DXY 与 TNX 同步施压，降低高 beta 暴露，等待风险释放。",
       inputs: [["VIX", signed(vix)], ["Fear & Greed", fearGreed], ["TNX", signed(tnx)], ["QQQ", signed(qqq)]]
     };
@@ -1033,6 +1272,10 @@ function calculateRiskRegime(indices, sentiment, retail) {
   return {
     score: bounded,
     mode: bounded >= 56 ? "Risk-On" : bounded <= 44 ? "Risk-Off" : "Neutral",
+    confidence: nonTradableCore === 0 ? "中" : "低",
+    dataQuality: nonTradableCore === 0 ? "delayed" : "proxy",
+    tradable: true,
+    reason: "核心指数可用但信号未完全共振。",
     conclusion:
       bounded >= 56
         ? "纳指强于大盘、VIX 回落，盘前风险偏好处于进攻区。"
@@ -1058,6 +1301,9 @@ function sentimentVerdict(sentiment, retail) {
 }
 
 function strategyFrom(risk, flows, retail, options) {
+  if (!risk.tradable) {
+    return ["数据不足，等待实时源恢复。", "SNAPSHOT / FALLBACK 不参与核心交易评分。"];
+  }
   const leader = flows[0]?.sector || "科技";
   const callBias = options.filter((item) => String(item.type).toLowerCase().includes("call")).length;
   if (risk.mode === "Risk-On" && callBias >= 2) {
@@ -1073,8 +1319,11 @@ function strategyFrom(risk, flows, retail, options) {
 }
 
 function tapeRead(movers, flows) {
+  if (!movers.some((item) => item.isTradable) && !flows.some((item) => item.isTradable)) {
+    return { title: "数据不足", reason: "等待实时行情与热钱板块源恢复。" };
+  }
   const leader = flows[0];
-  const positive = movers.filter((item) => item.change > 0).length;
+  const positive = movers.filter((item) => item.isTradable && item.change > 0).length;
   if (leader?.score >= 78 && positive >= 4) {
     return { title: `${leader.sector}主导风险偏好`, reason: "异动与热钱方向一致，盘前主线清晰。" };
   }
@@ -1085,9 +1334,9 @@ function tapeRead(movers, flows) {
 function render(dashboard) {
   const [chaseVerdict, chaseReason] = sentimentVerdict(dashboard.sentiment, dashboard.retail);
 
-  document.body.dataset.risk = dashboard.risk.mode.toLowerCase();
+  document.body.dataset.risk = riskDatasetValue(dashboard.risk.mode);
   text("#riskMode", displayRiskModeHero(dashboard.risk.mode));
-  text("#riskScore", dashboard.risk.score);
+  text("#riskScore", dashboard.risk.score === null ? "--" : dashboard.risk.score);
   text("#riskConclusion", dashboard.risk.conclusion);
   text("#strategyText", dashboard.strategy);
   text("#strategyContext", dashboard.strategyContext);
@@ -1104,7 +1353,7 @@ function render(dashboard) {
   text("#riskAppetite", dashboard.scannerStatus.riskAppetite);
   text("#premarketMomentum", dashboard.scannerStatus.premarketMomentum);
   text("#openingBias", dashboard.scannerStatus.openingBias);
-  document.querySelector("#gaugeFill").style.width = `${dashboard.risk.score}%`;
+  document.querySelector("#gaugeFill").style.width = `${dashboard.risk.score === null ? 0 : dashboard.risk.score}%`;
   document.querySelector("#statusDot").style.color = dashboard.sourceMode.startsWith("实时") ? "var(--green)" : "var(--gold)";
   document.querySelector("#statusDot").style.background = dashboard.sourceMode.startsWith("实时") ? "var(--green)" : "var(--gold)";
 
@@ -1151,7 +1400,8 @@ function renderModuleStatus(statusMap) {
       node.classList.toggle("module-delayed", item.status === "delayed");
       node.classList.toggle("module-proxy", item.status === "proxy");
       node.classList.toggle("module-cached", item.status === "cached");
-      node.classList.toggle("module-fallback", item.status === "fallback");
+      node.classList.toggle("module-fallback", item.status === "fallback" || item.status === "snapshot");
+      node.classList.toggle("module-unavailable", item.status === "unavailable");
       node.textContent = `${statusLabel(item.status, key)} · ${item.timestamp}`;
     });
   }
@@ -1162,11 +1412,13 @@ function statusLabel(status, key = "") {
   if (status === "live") return "实时（LIVE）";
   if (status === "delayed") return "延迟（DELAYED）";
   if (status === "proxy") return "代理推断（PROXY）";
-  if (status === "cached") return "上次数据";
+  if (status === "cached") return "缓存数据（CACHED）";
+  if (status === "unavailable") return "数据不可用（UNAVAILABLE）";
   return "快照数据（SNAPSHOT）";
 }
 
 function displayRiskMode(mode) {
+  if (mode === "数据不足") return "数据不足";
   if (mode === "Risk-On") return "风险偏好开启（Risk-On）";
   if (mode === "Risk-Off") return "风险规避（Risk-Off）";
   if (mode === "Neutral") return "中性（Neutral）";
@@ -1174,6 +1426,7 @@ function displayRiskMode(mode) {
 }
 
 function displayRiskModeHero(mode) {
+  if (mode === "数据不足") return "数据不足";
   if (mode === "Risk-On") return "风险偏好";
   if (mode === "Risk-Off") return "风险规避";
   if (mode === "Neutral") return "中性";
@@ -1197,6 +1450,7 @@ function displayTradeState(value = "") {
     "CALL MOMENTUM PROXY": "看涨动量代理（Call Momentum Proxy）",
     "LOW QUALITY": "低质量机会（Low Quality）",
     "LOW QUALITY / IGNORE": "低质量机会（Low Quality）",
+    "DATA INSUFFICIENT": "数据不足",
     CONFIRMED: "已确认（Confirmed）",
     "EARLY ONLY": "仅早盘观察（Early Only）",
     "FAILED OPEN": "开盘失败（Failed Open）",
@@ -1214,9 +1468,17 @@ function displayTradeState(value = "") {
     "Strong Trend": "趋势强劲",
     "Early Only": "仅早盘观察",
     "Put Watch": "看跌观察",
+    "数据不足": "数据不足",
     WATCH: "观察"
   };
   return map[value] || value;
+}
+
+function riskDatasetValue(mode) {
+  if (mode === "Risk-On") return "risk-on";
+  if (mode === "Risk-Off") return "risk-off";
+  if (mode === "Neutral") return "neutral";
+  return "neutral";
 }
 
 function displayMetricId(id) {
@@ -1235,12 +1497,30 @@ function displayMetricName(name) {
 
 function renderSources(items) {
   html("#sourceGrid", items.map((item) => `
-    <article class="source-card">
+    <article class="source-card quality-${escapeHtml(item.dataQuality || item.status)}">
       <span class="source-state ${item.status}">${statusLabel(item.status, item.key)}</span>
       <strong>${escapeHtml(item.label)}</strong>
-      <p>${sourceRole(item.key)} · ${escapeHtml(item.timestamp)}</p>
+      <p>${sourceRole(item.key)}<br>最后更新：${escapeHtml(sourceUpdatedLabel(item))} · ${escapeHtml(sourceAgeLabel(item.updatedAt))}<br>参与评分：${escapeHtml(sourceScoringLabel(item))}</p>
     </article>
   `).join(""));
+}
+
+function sourceUpdatedLabel(item) {
+  if (item.updatedAt) return formatDateTime(item.updatedAt);
+  if (item.dataQuality === "snapshot") return "快照数据，不参与评分";
+  return item.timestamp || "--";
+}
+
+function sourceAgeLabel(updatedAt) {
+  if (!updatedAt) return "age --";
+  const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
+  return `age ${minutes}m`;
+}
+
+function sourceScoringLabel(item) {
+  if (!item.isTradable) return "否";
+  if (item.dataQuality === "proxy") return "辅助";
+  return "是";
 }
 
 function sourceRole(key) {
@@ -1259,7 +1539,7 @@ function renderMetricGrid(selector, items, type = "index") {
   html(selector, items.map((item) => {
     const inverse = ["VIX", "TNX", "GOLD", "DXY", "Put/Call"].includes(item.id);
     return `
-      <article class="metric-card">
+      <article class="metric-card quality-${escapeHtml(item.dataQuality || "snapshot")}">
         <div class="metric-head"><span>${escapeHtml(displayMetricId(item.id))}</span><span>${escapeHtml(displayMetricName(item.name || ""))}</span></div>
         <div class="metric-value">${formatNumber(item.value)}</div>
         <div class="metric-change ${changeClass(item.change, inverse)}">${type === "sentiment" && item.id !== "Put/Call" ? signedRaw(item.change) : signed(item.change)}</div>
@@ -1311,17 +1591,18 @@ function renderRetail(retail, status = { status: "fallback" }) {
     <div class="mention-grid">
       ${retail.mentions.map(([symbol, count]) => `<span>${escapeHtml(symbol)} <b>${count}次</b></span>`).join("")}
     </div>
-    <p class="retail-note">${status.status === "fallback" ? "SNAPSHOT：当前为备用热度快照，等待 Reddit 数据刷新。" : "数字代表 WallStreetBets 近期帖子中股票代码被提及次数，仅代表散户关注度，不代表买卖信号。"}</p>
+    <p class="retail-note">${["fallback", "snapshot"].includes(status.status) ? "SNAPSHOT：当前为备用热度快照，等待 Reddit 数据刷新。" : "数字代表 WallStreetBets 近期帖子中股票代码被提及次数，仅代表散户关注度，不代表买卖信号。"}</p>
   `);
 }
 
 function renderOptions(items) {
   html("#optionsFlow", items.map((item) => `
-    <div class="feed-item option-proxy-card">
+    <div class="feed-item option-proxy-card quality-${escapeHtml(item.dataQuality || "proxy")}">
       <div class="row-head"><span>${escapeHtml(item.symbol)}</span><span>${escapeHtml(item.sector || "其他")}</span></div>
       <div class="option-score">${escapeHtml(displayTradeState(item.conviction || item.direction || "WATCHLIST"))}</div>
-      <strong class="option-direction">代理评分（Proxy Score） ${Math.round(Number(item.score || 0))}</strong>
+      <strong class="option-direction">代理评分（Proxy Score） ${item.score === null ? "--" : Math.round(Number(item.score || 0))}</strong>
       <p>${escapeHtml(item.summary)}</p>
+      <small>${escapeHtml(statusLabel(item.dataQuality || "proxy"))} · 代理推断，不是真实期权大单</small>
       <small>${escapeHtml(item.risk || "风险：需等待开盘量价确认。")}</small>
     </div>
   `).join(""));
@@ -1329,18 +1610,19 @@ function renderOptions(items) {
 
 function renderOpportunities(items) {
   html("#opportunityGrid", items.map((item) => `
-    <article class="opportunity-card ${signalClass(item.signal)}">
+    <article class="opportunity-card ${signalClass(item.signal)} quality-${escapeHtml(item.dataQuality || "snapshot")}">
       <div class="opportunity-head">
         <div>
           <strong>${escapeHtml(item.symbol)}</strong>
           <span>${escapeHtml(item.sector)}</span>
         </div>
-        <b>${item.score}</b>
+        <b>${item.score === null ? "--" : item.score}</b>
       </div>
       <div class="signal-pill">${escapeHtml(displayTradeState(item.signal))}</div>
       <p>${escapeHtml(item.logic)}</p>
       <div class="opportunity-meta">
-        <span>代理推断（Proxy）</span>
+        <span>可信度 ${escapeHtml(item.confidence || "低")}</span>
+        <span>${escapeHtml(item.dataBasis || "快照，不参与交易")}</span>
         <span>RVOL ${Number(item.relativeVolume || 0).toFixed(2)}x</span>
         <span>${escapeHtml(displayTradeState(item.vwapBias))}</span>
         <span>${escapeHtml(displayTradeState(item.openingConfirmation))}</span>
@@ -1388,11 +1670,11 @@ function renderMoverTable(items) {
 
 function renderFlows(items) {
   html("#flowGrid", items.map((item, index) => `
-    <article class="flow-card" title="${escapeHtml(item.summary)}">
+    <article class="flow-card quality-${escapeHtml(item.dataQuality || "proxy")}" title="${escapeHtml(item.summary)}">
       <div class="flow-rank"><span class="rank-num">#${index + 1}</span><span class="heat-score ${item.score >= 70 ? "up" : item.score <= 45 ? "down" : "flat"}">${item.score}</span></div>
       <h3>${escapeHtml(item.sector)}</h3>
       <p>${escapeHtml(item.summary)}</p>
-      <div class="subtle">Finviz heatmap ${signed(item.change)}</div>
+      <div class="subtle">${escapeHtml(statusLabel(item.dataQuality || "proxy"))} · Finviz heatmap ${signed(item.change)}</div>
       <div class="flow-bar"><span style="width:${item.score}%"></span></div>
     </article>
   `).join(""));

@@ -7,11 +7,23 @@
 - 前端每 60 秒刷新一次，并在页面打开时主动请求 `/api/snapshot?ts=Date.now()`。
 - `vercel.json` 当前不配置定时任务，适配 Vercel Hobby 免费版；刷新主要由页面请求触发。
 - `/api/snapshot` 使用 `no-store` 响应头，避免 Vercel 或浏览器复用旧快照。
+- Dashboard 统一区分 `LIVE`、`DELAYED`、`PROXY`、`CACHED`、`SNAPSHOT`、`UNAVAILABLE`。每个模块都会显示数据状态与最后真实更新时间，页面刷新时间不等于数据更新时间。
+- `SNAPSHOT` / fallback 只用于防止页面空白，不参与 Risk Regime、机会榜、盘前交易计划或期权代理方向评分。
+- `CACHED` 数据超过 15 分钟后不参与交易评分。
 - Yahoo / Reddit / TradingView 可显示 `LIVE` 或 `DELAYED`；Finviz、Benzinga、X Macro、Unusual Whales 在未接入真实授权 API 前统一显示 `PROXY` 或 `SNAPSHOT`。
 - 如果多源行情失败，SPY、QQQ、NDX、VIX、TNX、DXY、GOLD 使用最近结构快照，不显示 0，不显示 Yahoo waiting。
 - 盘前异动榜优先使用新闻/异动源；如果 movers 为空，自动从 Yahoo quotes 按涨跌幅绝对值生成；quotes 也为空时使用 snapshot movers。
 - Options Flow Proxy 不是真实机构期权大单流，只是基于价格动量、相对成交量、板块热度、新闻情绪、相对强弱、盘前涨跌和散户关注生成的代理信号。
 - 要得到真实每日变化的期权流、新闻和热钱排行，需要接入对应授权 API 或可用代理。
+
+## 当前免费版数据限制
+
+- 没有真实 Unusual Whales / Cheddar Flow / Polygon Options 级别的期权大单流。
+- 没有真实 Benzinga 授权新闻 API，Yahoo RSS 与新闻代理可能延迟。
+- 没有 WebSocket 实时行情，Yahoo / TradingView / Reddit 可能延迟、限流或间歇失败。
+- TradingView / Yahoo / Stooq / AlphaVantage demo 是免费行情适配层，不保证逐笔实时。
+- Snapshot 只用于避免页面空白和保留结构参考，不参与交易判断。
+- 如果核心行情不可用，系统会显示“数据不足”，不会用静态快照假装生成 Risk-On / Risk-Off 或强交易信号。
 
 ## 本地运行
 

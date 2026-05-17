@@ -322,6 +322,10 @@ body[data-risk="neutral"] .strategy-panel h2 {
   color: var(--muted);
 }
 
+.section-title span.module-unavailable {
+  color: var(--red);
+}
+
 .card-grid,
 .flow-grid,
 .mover-grid,
@@ -402,9 +406,25 @@ body[data-risk="neutral"] .strategy-panel h2 {
   background: rgba(106, 168, 255, 0.12);
 }
 
-.source-state.fallback {
+.source-state.fallback,
+.source-state.snapshot {
   color: var(--gold);
   background: rgba(213, 173, 91, 0.12);
+}
+
+.source-state.unavailable {
+  color: var(--red);
+  background: rgba(255, 91, 110, 0.1);
+}
+
+.quality-snapshot,
+.quality-fallback {
+  opacity: 0.55;
+}
+
+.quality-unavailable {
+  opacity: 0.72;
+  border-color: rgba(255, 91, 110, 0.28);
 }
 
 .card-grid.six {

@@ -137,8 +137,23 @@ const tvSymbols = [
 let lastGoodSources = {};
 let lastGoodSnapshot = null;
 
+function normalizeDataQuality(status = "") {
+  const value = String(status || "").toLowerCase();
+  if (["live", "delayed", "proxy", "cached", "snapshot", "unavailable"].includes(value)) return value;
+  if (value === "fallback") return "snapshot";
+  if (String(status).toUpperCase() === "LIVE") return "live";
+  if (String(status).toUpperCase() === "DELAYED") return "delayed";
+  if (String(status).toUpperCase() === "SNAPSHOT") return "snapshot";
+  return "snapshot";
+}
+
+function isTradableQuality(dataQuality) {
+  return ["live", "delayed", "proxy"].includes(dataQuality);
+}
+
 function metric(id, name, value, change, note, status = "SNAPSHOT") {
-  return { id, name, value, change, note, status };
+  const dataQuality = normalizeDataQuality(status);
+  return { id, name, value, change, note, status, dataQuality, isTradable: isTradableQuality(dataQuality), source: "Market Data Adapter" };
 }
 
 function quote(symbol, price, preMarketChange, relativeVolume = 1, extra = {}) {
@@ -155,7 +170,10 @@ function quote(symbol, price, preMarketChange, relativeVolume = 1, extra = {}) {
     relativeVolume,
     volume: extra.volume ?? 0,
     averageVolume: extra.averageVolume ?? 0,
-    dataStatus: extra.dataStatus || "SNAPSHOT"
+    dataStatus: extra.dataStatus || "SNAPSHOT",
+    dataQuality: normalizeDataQuality(extra.dataStatus || "SNAPSHOT"),
+    isTradable: isTradableQuality(normalizeDataQuality(extra.dataStatus || "SNAPSHOT")),
+    source: "Market Data Adapter"
   };
 }
 
@@ -164,15 +182,16 @@ function nowIso(value) {
 }
 
 function source(key, data, status, generatedAt, label = sourceCatalog[key]) {
-  return { data, status, label, updatedAt: generatedAt, timestamp: nowIso(generatedAt) };
+  const dataQuality = normalizeDataQuality(status);
+  return { data, status: dataQuality, dataQuality, isTradable: isTradableQuality(dataQuality), label, updatedAt: generatedAt, timestamp: nowIso(generatedAt) };
 }
 
 function cachedSource(key, cached) {
-  return { ...cached, status: "cached", timestamp: cached.timestamp || nowIso(cached.updatedAt || Date.now()) };
+  return { ...cached, status: "cached", dataQuality: "cached", isTradable: true, timestamp: cached.timestamp || nowIso(cached.updatedAt || Date.now()) };
 }
 
 function fallbackSource(key, data = null) {
-  return { data, status: "fallback", label: sourceCatalog[key], updatedAt: null, timestamp: "snapshot only" };
+  return { data, status: "snapshot", dataQuality: "snapshot", isTradable: false, label: sourceCatalog[key], updatedAt: null, timestamp: "snapshot only" };
 }
 
 function keepLastGood(key, item) {
@@ -277,7 +296,7 @@ async function loadMarketData(rawSymbols) {
 
   const quotes = stockRows.map(([symbol, row]) => {
     const fallback = snapshotQuotes.find((item) => item.symbol === symbol);
-    if (!row && fallback) return fallback;
+    if (!row && fallback) return { ...fallback, dataStatus: "SNAPSHOT", dataQuality: "snapshot", isTradable: false, source: "Fallback Snapshot" };
     if (!row) return null;
     const relativeVolume = row.volume && row.averageVolume ? row.volume / row.averageVolume : fallback?.relativeVolume || 1;
     return quote(symbol, row.price, row.change, relativeVolume, {
