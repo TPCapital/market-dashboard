@@ -103,13 +103,18 @@ const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
 const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 
+function envValue(name) {
+  const value = process.env[name];
+  return typeof value === "string" && value.length ? value : "";
+}
+
 function envDebug() {
   return {
     FINNHUB_API_KEY: !!process.env.FINNHUB_API_KEY,
     TWELVEDATA_API_KEY: !!process.env.TWELVEDATA_API_KEY,
     ALPHAVANTAGE_API_KEY: !!process.env.ALPHAVANTAGE_API_KEY,
     FRED_API_KEY: !!process.env.FRED_API_KEY,
-    TEST_ENV_CHECK: process.env.TEST_ENV_CHECK || null
+    TEST_ENV_CHECK: envValue("TEST_ENV_CHECK") || null
   };
 }
 
@@ -403,7 +408,7 @@ function normalizeProviderQuote(symbol, payload, provider, dataStatus = "DELAYED
 }
 
 async function loadFinnhubMarketData(symbols) {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   console.log("FINNHUB KEY EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "Finnhub", error: "missing_key", confidence: "LOW", fallback: true };
   const requested = cleanSymbols(symbols).split(",").filter(Boolean);
@@ -442,8 +447,8 @@ async function loadFinnhubMarketData(symbols) {
 
 async function loadFinnhubStrictProbe() {
   const testSymbols = ["AAPL", "NVDA", "SPY", "QQQ"];
-  const token = process.env.FINNHUB_API_KEY;
-  console.log("FINNHUB_KEY_EXISTS:", !!token);
+  const token = envValue("FINNHUB_API_KEY");
+  console.log("FINNHUB_API_KEY_EXISTS:", !!token);
   if (!token) {
     return {
       status: "UNAVAILABLE",
@@ -544,8 +549,8 @@ async function loadFinnhubStrictProbe() {
 }
 
 async function loadTwelveDataMarketData(symbols) {
-  const token = process.env.TWELVEDATA_API_KEY;
-  console.log("TWELVEDATA KEY EXISTS:", !!token);
+  const token = envValue("TWELVEDATA_API_KEY");
+  console.log("TWELVEDATA_API_KEY_EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "TwelveData", error: "TWELVEDATA_API_KEY is not configured" };
   const requested = cleanSymbols(symbols).split(",").filter(Boolean);
   const priority = ["SPY", "QQQ", "^VIX", "DX-Y.NYB", "GC=F"];
@@ -612,7 +617,8 @@ async function fetchStooqQuote(symbol) {
 }
 
 async function fetchAlphaVantageQuote(symbol) {
-  const token = process.env.ALPHAVANTAGE_API_KEY || "demo";
+  const token = envValue("ALPHAVANTAGE_API_KEY");
+  if (!token) return null;
   if (symbol === "GC=F") {
     const payload = await fetchJson(`https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey=${encodeURIComponent(token)}`, { timeoutMs: 7000 });
     const row = payload["Realtime Currency Exchange Rate"];
@@ -885,7 +891,7 @@ function buildInsiderNewsEvents(insiderRows = []) {
 }
 
 async function loadBenzingaNews() {
-  const key = process.env.BENZINGA_API_KEY;
+  const key = envValue("BENZINGA_API_KEY");
   if (!key) {
     return { data: [], status: "unavailable", label: "Benzinga", error: "benzinga_key_missing" };
   }
@@ -940,7 +946,7 @@ async function loadSecFilingsNews() {
 }
 
 async function loadFinnhubCompanyNews(symbols) {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   if (!token) return [];
   const tickers = cleanSymbols(symbols).split(",").filter((symbol) => symbolMeta[symbol]).slice(0, 20);
   const to = new Date();
@@ -958,7 +964,7 @@ async function loadFinnhubCompanyNews(symbols) {
 }
 
 async function loadFinnhubMarketNews() {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   if (!token) return [];
   try {
     const payload = await fetchJson(`https://finnhub.io/api/v1/news?category=general&token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
@@ -969,7 +975,7 @@ async function loadFinnhubMarketNews() {
 }
 
 async function loadFinnhubNews(symbols) {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   if (!token) return { data: [], status: "unavailable", label: "Finnhub News", error: "missing_key" };
   const [companyNews, marketNews] = await Promise.all([
     loadFinnhubCompanyNews(symbols),
@@ -991,7 +997,7 @@ async function loadFinnhubNews(symbols) {
 }
 
 async function loadFinnhubInsider(symbols) {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   if (!token) return { data: [], status: "unavailable", label: "Finnhub Insider", error: "FINNHUB_API_KEY is not configured" };
   const tickers = cleanSymbols(symbols).split(",").filter((symbol) => symbolMeta[symbol]).slice(0, 12);
   const rows = await Promise.all(tickers.map(async (symbol) => {
@@ -1017,7 +1023,7 @@ async function loadFinnhubInsider(symbols) {
 }
 
 async function loadFinnhubEarnings(symbols) {
-  const token = process.env.FINNHUB_API_KEY;
+  const token = envValue("FINNHUB_API_KEY");
   if (!token) return { data: [], status: "unavailable", label: "Finnhub Earnings", error: "FINNHUB_API_KEY is not configured" };
   try {
     const payload = await fetchJson(`https://finnhub.io/api/v1/calendar/earnings?token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
@@ -1041,8 +1047,8 @@ async function loadFinnhubEarnings(symbols) {
 }
 
 async function loadAlphaVantageMacro() {
-  const token = process.env.ALPHAVANTAGE_API_KEY;
-  console.log("ALPHAVANTAGE KEY EXISTS:", !!token);
+  const token = envValue("ALPHAVANTAGE_API_KEY");
+  console.log("ALPHAVANTAGE_API_KEY_EXISTS:", !!token);
   if (!token) return { data: null, status: "unavailable", label: "AlphaVantage", error: "ALPHAVANTAGE_API_KEY is not configured" };
   try {
     const startedAt = Date.now();
@@ -1069,8 +1075,8 @@ async function loadAlphaVantageMacro() {
 }
 
 async function loadFredMacro() {
-  const token = process.env.FRED_API_KEY;
-  console.log("FRED KEY EXISTS:", !!token);
+  const token = envValue("FRED_API_KEY");
+  console.log("FRED_API_KEY_EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "FRED", error: "FRED_API_KEY is not configured" };
   const ids = ["FEDFUNDS", "DGS10", "DGS2", "UNRATE", "CPIAUCSL"];
   const startedAt = Date.now();
@@ -1366,10 +1372,10 @@ function calculateRiskRegime(indices) {
 export async function buildSnapshot(req) {
   const generatedAt = Date.now();
   console.log(`${SOURCE_DEBUG_PREFIX} ENV CHECK`, {
-    FINNHUB_API_KEY: !!process.env.FINNHUB_API_KEY,
-    TWELVEDATA_API_KEY: !!process.env.TWELVEDATA_API_KEY,
-    ALPHAVANTAGE_API_KEY: !!process.env.ALPHAVANTAGE_API_KEY,
-    FRED_API_KEY: !!process.env.FRED_API_KEY
+    FINNHUB_API_KEY: !!envValue("FINNHUB_API_KEY"),
+    TWELVEDATA_API_KEY: !!envValue("TWELVEDATA_API_KEY"),
+    ALPHAVANTAGE_API_KEY: !!envValue("ALPHAVANTAGE_API_KEY"),
+    FRED_API_KEY: !!envValue("FRED_API_KEY")
   });
   const defaultSymbols = "SPY,QQQ,NVDA,AMD,AVGO,MRVL,MSFT,AMZN,META,TSLA,PLTR,ORCL,CRWD,COIN,MSTR,DASH,CSCO,LLY,AAPL";
   const symbols = cleanSymbols(req?.query?.symbols || defaultSymbols);
@@ -1387,12 +1393,12 @@ export async function buildSnapshot(req) {
   ]);
   const earningsLayer = await settleSource("earnings", () => buildEarningsLayer({
     symbols,
-    finnhubKey: process.env.FINNHUB_API_KEY || "",
-    alphaVantageKey: process.env.ALPHAVANTAGE_API_KEY || ""
+    finnhubKey: envValue("FINNHUB_API_KEY"),
+    alphaVantageKey: envValue("ALPHAVANTAGE_API_KEY")
   }), generatedAt, { events: [] }, "Earnings Layer");
   const insiderLayer = await settleSource("insider", () => buildInsiderLayer({
     symbols,
-    finnhubKey: process.env.FINNHUB_API_KEY || ""
+    finnhubKey: envValue("FINNHUB_API_KEY")
   }), generatedAt, { signals: [] }, "Insider Layer");
   const marketData = await settleSource("marketData", () => loadMarketData(symbols, {
     finnhub: finnhubProbe.quotes || [],
