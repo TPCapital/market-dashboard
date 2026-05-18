@@ -24,6 +24,12 @@
 - Layer 4 新闻催化层：Benzinga -> Finnhub company/market news -> Yahoo RSS -> Snapshot
 - Layer 5 交易信号层：Premarket Scanner + Signal Engine
 
+新增数据层模块（均在 `lib/`）：
+- `earnings.js`：Earnings Layer，整合 Finnhub/AlphaVantage 财报日历
+- `insider.js`：Insider Layer，整合 Finnhub 内部人交易信号
+- `relative-volume.js`：Relative Volume Scanner，生成 RVOL 扩张与代理量能信号
+- `market-breadth.js`：Market Breadth Engine，输出 breadth score 与 regime hint
+
 ## 行情优先级
 
 - 指数：`TwelveData -> Finnhub -> TradingView -> AlphaVantage -> Stooq -> Yahoo -> Snapshot`

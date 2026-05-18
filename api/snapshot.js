@@ -2,6 +2,9 @@ import { cleanSymbols, fetchJson, noStoreJson } from "../lib/utils.js";
 import { buildMarketBreadth } from "../lib/market-breadth.js";
 import { runPremarketScanner } from "../lib/premarket-scanner.js";
 import { buildSignalEngine } from "../lib/signal-engine.js";
+import { buildEarningsLayer } from "../lib/earnings.js";
+import { buildInsiderLayer } from "../lib/insider.js";
+import { buildRelativeVolumeLayer } from "../lib/relative-volume.js";
 
 const MARKET_SYMBOLS = {
   SPY: "SPY",
@@ -18,6 +21,10 @@ const sourceCatalog = {
   twelveData: "TwelveData",
   alphavantage: "AlphaVantage",
   fred: "FRED",
+  earnings: "Earnings Layer",
+  insider: "Insider Layer",
+  relativeVolume: "Relative Volume Scanner",
+  marketBreadth: "Market Breadth Engine",
   yahoo: "Market Data Adapter",
   tradingView: "TradingView Screener",
   xMacro: "Macro Feed",
@@ -145,6 +152,7 @@ let lastGoodSources = {};
 let lastGoodSnapshot = null;
 const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
+const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 
 function normalizeDataQuality(status = "") {
   const value = String(status || "").toLowerCase();
@@ -194,17 +202,75 @@ function nowIso(value) {
   return new Date(value).toISOString();
 }
 
-function source(key, data, status, generatedAt, label = sourceCatalog[key]) {
+function confidenceFromStatus(status) {
+  const s = normalizeDataQuality(status);
+  if (s === "live") return "HIGH";
+  if (s === "delayed") return "MEDIUM";
+  if (s === "cached") return "MEDIUM";
+  if (s === "proxy") return "LOW";
+  if (s === "snapshot") return "LOW";
+  return "LOW";
+}
+
+function freshnessFromUpdatedAt(updatedAt, status) {
+  if (!updatedAt) return status === "snapshot" ? "snapshot" : "stale";
+  const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function source(key, data, status, generatedAt, label = sourceCatalog[key], extra = {}) {
   const dataQuality = normalizeDataQuality(status);
-  return { data, status: dataQuality, dataQuality, isTradable: isTradableQuality(dataQuality), label, updatedAt: generatedAt, timestamp: nowIso(generatedAt) };
+  const updatedAt = Number(extra.updatedAt || generatedAt);
+  const confidence = extra.confidence || confidenceFromStatus(dataQuality);
+  const fallback = Boolean(extra.fallback ?? (dataQuality === "snapshot" || dataQuality === "cached" || dataQuality === "proxy"));
+  return {
+    data,
+    status: dataQuality,
+    source: label,
+    dataQuality,
+    isTradable: isTradableQuality(dataQuality),
+    label,
+    updatedAt,
+    timestamp: nowIso(updatedAt),
+    latency: Number.isFinite(Number(extra.latency)) ? Number(extra.latency) : null,
+    confidence,
+    freshness: extra.freshness || freshnessFromUpdatedAt(updatedAt, dataQuality),
+    fallback
+  };
 }
 
 function cachedSource(key, cached) {
-  return { ...cached, status: "cached", dataQuality: "cached", isTradable: true, timestamp: cached.timestamp || nowIso(cached.updatedAt || Date.now()) };
+  const updatedAt = cached.updatedAt || Date.now();
+  return {
+    ...cached,
+    status: "cached",
+    source: cached.source || sourceCatalog[key],
+    dataQuality: "cached",
+    isTradable: true,
+    timestamp: cached.timestamp || nowIso(updatedAt),
+    confidence: cached.confidence || "MEDIUM",
+    freshness: freshnessFromUpdatedAt(updatedAt, "cached"),
+    fallback: true
+  };
 }
 
 function fallbackSource(key, data = null) {
-  return { data, status: "snapshot", dataQuality: "snapshot", isTradable: false, label: sourceCatalog[key], updatedAt: null, timestamp: "snapshot only" };
+  return {
+    data,
+    status: "snapshot",
+    source: sourceCatalog[key],
+    dataQuality: "snapshot",
+    isTradable: false,
+    label: sourceCatalog[key],
+    updatedAt: null,
+    timestamp: "snapshot only",
+    latency: null,
+    confidence: "LOW",
+    freshness: "snapshot",
+    fallback: true
+  };
 }
 
 function keepLastGood(key, item) {
@@ -219,8 +285,29 @@ function lastOrFallback(key, fallbackData = null) {
 async function settleSource(key, loader, generatedAt, fallbackData = null, label) {
   try {
     const loaded = await loader();
-    return keepLastGood(key, source(key, loaded.data ?? loaded, loaded.status || "live", generatedAt, label || loaded.label || sourceCatalog[key]));
-  } catch {
+    return keepLastGood(
+      key,
+      source(
+        key,
+        loaded.data ?? loaded,
+        loaded.status || "live",
+        generatedAt,
+        label || loaded.label || sourceCatalog[key],
+        {
+          latency: loaded.latency,
+          confidence: loaded.confidence,
+          freshness: loaded.freshness,
+          fallback: loaded.fallback,
+          updatedAt: loaded.updatedAt
+        }
+      )
+    );
+  } catch (error) {
+    console.error(`${SOURCE_DEBUG_PREFIX} settleSource error`, {
+      source: key,
+      message: error?.message || String(error),
+      stack: error?.stack || null
+    });
     if (lastGoodSources[key]) return cachedSource(key, lastGoodSources[key]);
     return fallbackSource(key, fallbackData);
   }
@@ -269,6 +356,38 @@ function responseCodeFromError(error) {
   return String(error?.message || "").match(/upstream\s+(\d+)/)?.[1] || "fetch-error";
 }
 
+async function fetchJsonWithDebug(sourceName, url, options = {}) {
+  console.log(`${SOURCE_DEBUG_PREFIX} FETCHING ${sourceName}:`, url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 10000);
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; AI-Equity-Dashboard/1.0)",
+        Accept: "application/json,text/plain,*/*",
+        ...(options.headers || {})
+      },
+      body: options.body
+    });
+    console.log(`${SOURCE_DEBUG_PREFIX} ${sourceName} RESPONSE STATUS:`, response.status);
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { raw: text?.slice(0, 500) || "" };
+    }
+    console.log(`${SOURCE_DEBUG_PREFIX} ${sourceName} JSON:`, data);
+    if (!response.ok) throw new Error(`upstream ${response.status}`);
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function normalizeProviderQuote(symbol, payload, provider, dataStatus = "DELAYED") {
   const price = Number(payload?.price ?? payload?.c ?? payload?.close);
   const previous = Number(payload?.previous ?? payload?.pc ?? payload?.previous_close);
@@ -296,40 +415,53 @@ function normalizeProviderQuote(symbol, payload, provider, dataStatus = "DELAYED
 
 async function loadFinnhubMarketData(symbols) {
   const token = process.env.FINNHUB_API_KEY;
+  console.log("FINNHUB KEY EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "Finnhub", error: "FINNHUB_API_KEY is not configured" };
-  const list = cleanSymbols(symbols).split(",").filter(Boolean);
+  const requested = cleanSymbols(symbols).split(",").filter(Boolean);
+  const priority = ["AAPL", "SPY", "QQQ", "NVDA"];
+  const list = [...new Set([...priority, ...requested])];
+  const latencies = [];
   const rows = await Promise.all(list.map(async (symbol) => {
     const endpoint = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=***`;
     try {
       const startedAt = Date.now();
-      const payload = await fetchJson(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=${encodeURIComponent(token)}`, { timeoutMs: 8000 });
-      console.log("[snapshot:finnhub] fetch success", { symbol, endpoint, responseCode: 200, latencyMs: Date.now() - startedAt });
+      const payload = await fetchJsonWithDebug("FINNHUB", `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=${encodeURIComponent(token)}`, { timeoutMs: 8000 });
+      const latencyMs = Date.now() - startedAt;
+      latencies.push(latencyMs);
+      console.log("[snapshot:finnhub] fetch success", { symbol, endpoint, responseCode: 200, latencyMs });
+      if (payload?.error) throw new Error(payload.error);
       const normalized = normalizeProviderQuote(symbol, payload, "Finnhub", "LIVE");
       if (!normalized) console.log("[snapshot:finnhub] fetch fail", { symbol, endpoint, responseCode: 200, reason: "empty-price" });
       return normalized;
     } catch (error) {
-      console.log("[snapshot:finnhub] fetch fail", { symbol, endpoint, responseCode: responseCodeFromError(error), reason: error.message });
+      console.error("FINNHUB ERROR:", { symbol, endpoint, responseCode: responseCodeFromError(error), reason: error.message });
       return lastGoodFinnhubQuotes.get(symbol) || null;
     }
   }));
   const data = rows.filter(Boolean);
   return data.length
-    ? { data, status: "live", label: "Finnhub" }
+    ? { data, status: "live", label: "Finnhub", latency: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null, confidence: "HIGH", fallback: false }
     : { data: [], status: "unavailable", label: "Finnhub", error: "Finnhub returned no usable quotes" };
 }
 
 async function loadTwelveDataMarketData(symbols) {
   const token = process.env.TWELVEDATA_API_KEY;
+  console.log("TWELVEDATA KEY EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "TwelveData", error: "TWELVEDATA_API_KEY is not configured" };
-  const originalSymbols = cleanSymbols(symbols).split(",").filter(Boolean);
+  const requested = cleanSymbols(symbols).split(",").filter(Boolean);
+  const priority = ["SPY", "QQQ", "^VIX", "DX-Y.NYB", "GC=F"];
+  const originalSymbols = [...new Set([...priority, ...requested])];
   const providerSymbols = originalSymbols.map(twelveDataSymbol);
+  const latencies = [];
   const rows = await Promise.all(originalSymbols.map(async (symbol, index) => {
     const provider = providerSymbols[index];
     const endpoint = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=***`;
     try {
       const startedAt = Date.now();
-      const pricePayload = await fetchJson(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
-      console.log("[snapshot:twelvedata] fetch success", { symbol, providerSymbol: provider, endpoint, responseCode: 200, latencyMs: Date.now() - startedAt });
+      const pricePayload = await fetchJsonWithDebug("TWELVEDATA", `https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+      const latencyMs = Date.now() - startedAt;
+      latencies.push(latencyMs);
+      console.log("[snapshot:twelvedata] fetch success", { symbol, providerSymbol: provider, endpoint, responseCode: 200, latencyMs });
       const price = Number(pricePayload?.price);
       if (!Number.isFinite(price) || price <= 0) {
         console.log("[snapshot:twelvedata] fetch fail", { symbol, providerSymbol: provider, endpoint, responseCode: 200, reason: pricePayload?.message || "empty-price" });
@@ -337,20 +469,20 @@ async function loadTwelveDataMarketData(symbols) {
       }
       let quotePayload = {};
       try {
-        quotePayload = await fetchJson(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+        quotePayload = await fetchJsonWithDebug("TWELVEDATA_QUOTE", `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
       } catch (error) {
-        console.log("[snapshot:twelvedata] quote detail fail", { symbol, providerSymbol: provider, responseCode: responseCodeFromError(error), reason: error.message });
+        console.error("TWELVEDATA ERROR:", { symbol, providerSymbol: provider, responseCode: responseCodeFromError(error), reason: error.message });
       }
       return normalizeProviderQuote(symbol, { ...quotePayload, price, close: price }, "TwelveData", "DELAYED");
     } catch (error) {
-      console.log("[snapshot:twelvedata] fetch fail", { symbol, providerSymbol: provider, endpoint, responseCode: responseCodeFromError(error), reason: error.message });
+      console.error("TWELVEDATA ERROR:", { symbol, providerSymbol: provider, endpoint, responseCode: responseCodeFromError(error), reason: error.message });
       return lastGoodTwelveDataQuotes.get(symbol) || null;
     }
   }));
   const data = rows.filter(Boolean);
   return data.length
-    ? { data, status: "delayed", label: "TwelveData" }
-    : { data: [], status: "delayed", label: "TwelveData", error: "TwelveData returned no usable quotes" };
+    ? { data, status: "delayed", label: "TwelveData", latency: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null, confidence: "MEDIUM", fallback: false }
+    : { data: [], status: "delayed", label: "TwelveData", error: "TwelveData returned no usable quotes", confidence: "LOW", fallback: true };
 }
 
 async function loadFinnhubQuotes(symbols) {
@@ -673,36 +805,55 @@ async function loadFinnhubEarnings(symbols) {
 
 async function loadAlphaVantageMacro() {
   const token = process.env.ALPHAVANTAGE_API_KEY;
+  console.log("ALPHAVANTAGE KEY EXISTS:", !!token);
   if (!token) return { data: null, status: "unavailable", label: "AlphaVantage", error: "ALPHAVANTAGE_API_KEY is not configured" };
   try {
+    const startedAt = Date.now();
     const [dgs10, dgs2, sector] = await Promise.all([
-      fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null),
-      fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=2year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null),
-      fetchJson(`https://www.alphavantage.co/query?function=SECTOR&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null)
+      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_10Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+        console.error("ALPHAVANTAGE ERROR:", { function: "TREASURY_YIELD_10Y", reason: error.message });
+        return null;
+      }),
+      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_2Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=2year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+        console.error("ALPHAVANTAGE ERROR:", { function: "TREASURY_YIELD_2Y", reason: error.message });
+        return null;
+      }),
+      fetchJsonWithDebug("ALPHAVANTAGE_SECTOR", `https://www.alphavantage.co/query?function=SECTOR&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+        console.error("ALPHAVANTAGE ERROR:", { function: "SECTOR", reason: error.message });
+        return null;
+      })
     ]);
-    if (!dgs10 && !dgs2 && !sector) return { data: null, status: "unavailable", label: "AlphaVantage", error: "AlphaVantage macro unavailable" };
-    return { data: { dgs10, dgs2, sector }, status: "delayed", label: "AlphaVantage" };
+    if (!dgs10 && !dgs2 && !sector) return { data: null, status: "delayed", label: "AlphaVantage", error: "AlphaVantage macro unavailable", latency: Date.now() - startedAt, confidence: "LOW", fallback: true };
+    return { data: { dgs10, dgs2, sector }, status: "delayed", label: "AlphaVantage", latency: Date.now() - startedAt, confidence: "MEDIUM", fallback: false };
   } catch (error) {
-    return { data: null, status: "unavailable", label: "AlphaVantage", error: error.message };
+    console.error("ALPHAVANTAGE ERROR:", { reason: error.message, stack: error.stack || null });
+    return { data: null, status: "delayed", label: "AlphaVantage", error: error.message, confidence: "LOW", fallback: true };
   }
 }
 
 async function loadFredMacro() {
   const token = process.env.FRED_API_KEY;
+  console.log("FRED KEY EXISTS:", !!token);
   if (!token) return { data: [], status: "unavailable", label: "FRED", error: "FRED_API_KEY is not configured" };
   const ids = ["FEDFUNDS", "DGS10", "DGS2", "UNRATE", "CPIAUCSL"];
+  const startedAt = Date.now();
+  const latencies = [];
   const data = await Promise.all(ids.map(async (id) => {
     try {
-      const payload = await fetchJson(`https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(id)}&api_key=${encodeURIComponent(token)}&file_type=json&sort_order=desc&limit=1`, { timeoutMs: 9000 });
+      const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(id)}&api_key=${encodeURIComponent(token)}&file_type=json&sort_order=desc&limit=1`;
+      const rowStart = Date.now();
+      const payload = await fetchJsonWithDebug("FRED", url, { timeoutMs: 9000 });
+      latencies.push(Date.now() - rowStart);
       const latest = payload.observations?.[0];
       return { id, date: latest?.date, value: latest?.value };
-    } catch {
+    } catch (error) {
+      console.error("FRED ERROR:", { series: id, reason: error.message, responseCode: responseCodeFromError(error) });
       return { id, value: null };
     }
   }));
   return data.some((item) => item.value !== null)
-    ? { data, status: "delayed", label: "FRED" }
-    : { data: [], status: "unavailable", label: "FRED", error: "FRED unavailable" };
+    ? { data, status: "delayed", label: "FRED", latency: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : Date.now() - startedAt, confidence: "HIGH", fallback: false }
+    : { data: [], status: "delayed", label: "FRED", error: "FRED unavailable", latency: Date.now() - startedAt, confidence: "LOW", fallback: true };
 }
 
 async function fetchText(url) {
@@ -902,13 +1053,19 @@ function deriveOptionsProxy(quotes, context = {}) {
 function calculateOptionsProxyScore(stock, context = {}) {
   const sectorMap = new Map((context.sectors || []).map((item) => [item.sector, item]));
   const mentionMap = new Map(context.reddit?.mentions || []);
+  const rvolMap = new Map((context.relativeVolume || []).map((item) => [item.symbol, item]));
+  const earningsSet = new Set((context.earnings || []).map((item) => item.symbol).filter(Boolean));
+  const insiderMap = new Map((context.insider || []).map((item) => [item.symbol, item]));
   const news = context.news || [];
   const sector = stock.sector || "其他";
   const sectorHeat = sectorMap.get(sector)?.score ?? (55 + sectorThemeBonus(sector));
   const preChange = Number(stock.preMarketChangePercent ?? stock.preMarketChange ?? 0);
-  const relativeVolume = Number(stock.relativeVolume || stock.volumeRatio || 1);
+  const relativeVolume = Number(rvolMap.get(stock.symbol)?.relativeVolume || stock.relativeVolume || stock.volumeRatio || 1);
   const mentions = Number(mentionMap.get(stock.symbol) || 0);
   const newsBias = news.find((item) => item.ticker === stock.symbol)?.bias || "NEUTRAL";
+  const earningsBoost = earningsSet.has(stock.symbol) ? 5 : 0;
+  const insiderSentiment = insiderMap.get(stock.symbol)?.sentiment || "NEUTRAL";
+  const insiderBoost = insiderSentiment === "BULLISH" ? 4 : insiderSentiment === "BEARISH" ? -4 : 0;
   const aiBonus = /AI|半导体|软件|加密|高 beta/.test(sector) ? 10 : 0;
   const score = clamp(Math.round(
     Math.min(Math.abs(preChange), 6) * 7 +
@@ -916,6 +1073,8 @@ function calculateOptionsProxyScore(stock, context = {}) {
     sectorHeat * 0.22 +
     (newsBias === "BULLISH" ? 14 : newsBias === "BEARISH" ? 8 : 6) +
     Math.min(mentions, 15) * 1.5 +
+    earningsBoost +
+    insiderBoost +
     aiBonus
   ));
   const conviction = classifyFlowConviction(score, preChange, newsBias, relativeVolume);
@@ -966,6 +1125,12 @@ function calculateRiskRegime(indices) {
 
 export async function buildSnapshot(req) {
   const generatedAt = Date.now();
+  console.log(`${SOURCE_DEBUG_PREFIX} ENV CHECK`, {
+    FINNHUB_API_KEY: !!process.env.FINNHUB_API_KEY,
+    TWELVEDATA_API_KEY: !!process.env.TWELVEDATA_API_KEY,
+    ALPHAVANTAGE_API_KEY: !!process.env.ALPHAVANTAGE_API_KEY,
+    FRED_API_KEY: !!process.env.FRED_API_KEY
+  });
   const defaultSymbols = "SPY,QQQ,NVDA,AMD,AVGO,MRVL,MSFT,AMZN,META,TSLA,PLTR,ORCL,CRWD,COIN,MSTR,DASH,CSCO,LLY,AAPL";
   const symbols = cleanSymbols(req?.query?.symbols || defaultSymbols);
   const marketSymbols = `${Object.values(MARKET_SYMBOLS).join(",")},${symbols}`;
@@ -984,6 +1149,15 @@ export async function buildSnapshot(req) {
     settleSource("alphavantage", loadAlphaVantageMacro, generatedAt, null, "AlphaVantage"),
     settleSource("fred", loadFredMacro, generatedAt, [], "FRED")
   ]);
+  const earningsLayer = await settleSource("earnings", () => buildEarningsLayer({
+    symbols,
+    finnhubKey: process.env.FINNHUB_API_KEY || "",
+    alphaVantageKey: process.env.ALPHAVANTAGE_API_KEY || ""
+  }), generatedAt, { events: [] }, "Earnings Layer");
+  const insiderLayer = await settleSource("insider", () => buildInsiderLayer({
+    symbols,
+    finnhubKey: process.env.FINNHUB_API_KEY || ""
+  }), generatedAt, { signals: [] }, "Insider Layer");
   const yahoo = await settleSource("yahoo", () => loadMarketData(symbols, {
     finnhub: finnhub.data || [],
     twelveData: twelveData.data || [],
@@ -1003,15 +1177,42 @@ export async function buildSnapshot(req) {
       : snapshotNews;
   const sectorData = deriveSectors(quotes);
   const moverData = deriveMovers(quotes, news);
-  const optionProxyData = deriveOptionsProxy(quotes, { sectors: sectorData, tradingView: tradingView.data || [], reddit: reddit.data || {}, news });
+  const relativeVolumeLayer = await settleSource("relativeVolume", () => buildRelativeVolumeLayer({
+    quotes,
+    tradingView: tradingView.data || []
+  }), generatedAt, { leaders: [] }, "Relative Volume Scanner");
+  const optionProxyData = deriveOptionsProxy(quotes, {
+    sectors: sectorData,
+    tradingView: tradingView.data || [],
+    reddit: reddit.data || {},
+    news,
+    relativeVolume: relativeVolumeLayer.data?.leaders || [],
+    earnings: earningsLayer.data?.events || [],
+    insider: insiderLayer.data?.signals || []
+  });
   const riskRegime = calculateRiskRegime(yahoo.data?.indices || snapshotIndices);
-  const marketBreadth = buildMarketBreadth({ quotes, sectors: sectorData, indices: yahoo.data?.indices || snapshotIndices });
-  const premarketScanner = runPremarketScanner({ quotes, news });
+  const marketBreadthData = buildMarketBreadth({
+    quotes,
+    sectors: sectorData,
+    indices: yahoo.data?.indices || snapshotIndices,
+    status: yahoo.status === "live" ? "live" : yahoo.status === "delayed" ? "delayed" : "proxy"
+  });
+  const marketBreadthLayer = await settleSource("marketBreadth", async () => marketBreadthData, generatedAt, {}, "Market Breadth Engine");
+  const premarketScanner = runPremarketScanner({
+    quotes,
+    news,
+    earnings: earningsLayer.data?.events || [],
+    insider: insiderLayer.data?.signals || [],
+    relativeVolume: relativeVolumeLayer.data?.leaders || []
+  });
   const signalEngine = buildSignalEngine({
     indices: yahoo.data?.indices || snapshotIndices,
     scanner: premarketScanner,
-    breadth: marketBreadth,
-    risk: riskRegime
+    breadth: marketBreadthLayer.data || marketBreadthData,
+    risk: riskRegime,
+    earnings: earningsLayer.data?.events || [],
+    insider: insiderLayer.data?.signals || [],
+    relativeVolume: relativeVolumeLayer.data?.leaders || []
   });
 
   const finviz = keepLastGood("finviz", source("finviz", sectorData, "proxy", generatedAt, "Sector Heat Proxy"));
@@ -1030,11 +1231,14 @@ export async function buildSnapshot(req) {
         confidence: finnhub.status === "live" || twelveData.status === "delayed" ? "中高" : "低",
         freshness: nowIso(generatedAt)
       },
-      marketStructure: marketBreadth,
+      marketStructure: marketBreadthLayer.data || marketBreadthData,
+      earnings: earningsLayer.data || { events: [] },
+      insider: insiderLayer.data || { signals: [] },
+      relativeVolume: relativeVolumeLayer.data || { leaders: [] },
       institutionalBehavior: {
-        insider: insider.data || [],
-        earnings: earnings.data || [],
-        confidence: insider.status === "delayed" || earnings.status === "delayed" ? "中" : "低"
+        insider: insiderLayer.data?.signals || insider.data || [],
+        earnings: earningsLayer.data?.events || earnings.data || [],
+        confidence: insiderLayer.status === "delayed" || earningsLayer.status === "delayed" ? "中" : "低"
       },
       newsCatalyst: {
         topSource: Array.isArray(finnhubNews.data) && finnhubNews.data.length ? "Finnhub" : Array.isArray(yahooNews.data) && yahooNews.data.length ? "Yahoo RSS" : "Snapshot",
@@ -1048,6 +1252,10 @@ export async function buildSnapshot(req) {
         twelveData,
         alphavantage: alphaMacro,
         fred: fredMacro,
+        earnings: earningsLayer,
+        insider: insiderLayer,
+        relativeVolume: relativeVolumeLayer,
+        marketBreadth: marketBreadthLayer,
         yahoo,
         reddit,
         tradingView,
@@ -1092,6 +1300,12 @@ export default async function handler(req, res) {
       sources: {
         finnhub: fallbackSource("finnhub", []),
         twelveData: fallbackSource("twelveData", []),
+        alphavantage: fallbackSource("alphavantage", null),
+        fred: fallbackSource("fred", []),
+        earnings: fallbackSource("earnings", { events: [] }),
+        insider: fallbackSource("insider", { signals: [] }),
+        relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
+        marketBreadth: fallbackSource("marketBreadth", {}),
         yahoo: fallbackSource("yahoo", { indices: snapshotIndices, quotes: snapshotQuotes }),
         reddit: fallbackSource("reddit", { score: 58, tone: "中性", mentions: [["NVDA", 8], ["TSLA", 6]], summary: "SNAPSHOT：散户关注集中在 AI 与高 beta。" }),
         tradingView: fallbackSource("tradingView", []),

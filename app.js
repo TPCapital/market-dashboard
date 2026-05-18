@@ -9,6 +9,10 @@ const sourceCatalog = {
   twelveData: "TwelveData",
   alphavantage: "AlphaVantage",
   fred: "FRED",
+  earnings: "Earnings Layer",
+  insider: "Insider Layer",
+  relativeVolume: "Relative Volume Scanner",
+  marketBreadth: "Market Breadth Engine",
   yahoo: "Yahoo Finance",
   tradingView: "TradingView Screener",
   xMacro: "Walter Bloomberg X / Kobeissi X",
@@ -239,8 +243,13 @@ async function loadServerSnapshot() {
       data: value.data,
       status,
       label: value.label || sourceCatalog[key],
+      source: value.source || value.label || sourceCatalog[key],
       updatedAt,
-      timestamp: ["live", "delayed", "proxy"].includes(dataQuality) ? formatClock(updatedAt) : dataQuality === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "SNAPSHOT"
+      timestamp: ["live", "delayed", "proxy"].includes(dataQuality) ? formatClock(updatedAt) : dataQuality === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "SNAPSHOT",
+      latency: Number.isFinite(Number(value.latency)) ? Number(value.latency) : null,
+      confidence: value.confidence || confidenceLabelByStatus(status),
+      freshness: value.freshness || freshnessLabel(updatedAt, status),
+      fallback: Boolean(value.fallback ?? (["snapshot", "cached", "proxy"].includes(dataQuality)))
     };
     writeSourceCache(key, value.data, updatedAt, status);
   }
@@ -274,8 +283,13 @@ function loadCachedSources() {
       dataQuality: "cached",
       originalDataQuality: cached.dataQuality,
       label: sourceCatalog[key],
+      source: sourceCatalog[key],
       updatedAt: cached.updatedAt,
-      timestamp: `最后成功 ${formatDateTime(cached.updatedAt)}`
+      timestamp: `最后成功 ${formatDateTime(cached.updatedAt)}`,
+      latency: null,
+      confidence: "MEDIUM",
+      freshness: freshnessLabel(cached.updatedAt, "cached"),
+      fallback: true
     };
     hasCached = true;
   }
@@ -289,6 +303,10 @@ function fallbackSources() {
     twelveData: fallbackSource("twelveData", []),
     alphavantage: fallbackSource("alphavantage", null),
     fred: fallbackSource("fred", []),
+    earnings: fallbackSource("earnings", { events: [] }),
+    insider: fallbackSource("insider", { signals: [] }),
+    relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
+    marketBreadth: fallbackSource("marketBreadth", {}),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
     finnhubInsider: fallbackSource("finnhubInsider", []),
     finnhubEarnings: fallbackSource("finnhubEarnings", []),
@@ -305,9 +323,14 @@ function fallbackSource(key, data) {
   return {
     data,
     status: "snapshot",
+    source: sourceCatalog[key],
     label: sourceCatalog[key],
     updatedAt: null,
-    timestamp: FALLBACK_SNAPSHOT_LABEL
+    timestamp: FALLBACK_SNAPSHOT_LABEL,
+    latency: null,
+    confidence: "LOW",
+    freshness: "snapshot",
+    fallback: true
   };
 }
 
@@ -350,9 +373,31 @@ function enrichSources(rawSources) {
       dataQuality,
       updatedAt,
       isTradable,
-      timestamp: source?.timestamp || qualityTimestamp(dataQuality, updatedAt)
+      timestamp: source?.timestamp || qualityTimestamp(dataQuality, updatedAt),
+      source: source?.source || source?.label || sourceCatalog[key] || key,
+      latency: Number.isFinite(Number(source?.latency)) ? Number(source.latency) : null,
+      confidence: source?.confidence || confidenceLabelByStatus(dataQuality),
+      freshness: source?.freshness || freshnessLabel(updatedAt, dataQuality),
+      fallback: Boolean(source?.fallback ?? (["snapshot", "cached", "proxy"].includes(dataQuality)))
     }];
   }));
+}
+
+function confidenceLabelByStatus(status = "") {
+  const q = normalizeDataQuality(status);
+  if (q === "live") return "HIGH";
+  if (q === "delayed") return "MEDIUM";
+  if (q === "cached") return "MEDIUM";
+  return "LOW";
+}
+
+function freshnessLabel(updatedAt, status = "") {
+  const q = normalizeDataQuality(status);
+  if (!updatedAt) return q === "snapshot" ? "snapshot" : "stale";
+  const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
 }
 
 function qualityTimestamp(dataQuality, updatedAt) {
@@ -433,11 +478,16 @@ function buildDashboard(sources) {
       .map(([key, value]) => ({
         key,
         label: value.label,
+        source: value.source || value.label,
         status: value.status,
         timestamp: value.timestamp || "备用快照",
         updatedAt: value.updatedAt,
         dataQuality: value.dataQuality,
-        isTradable: value.isTradable
+        isTradable: value.isTradable,
+        latency: value.latency,
+        freshness: value.freshness,
+        confidence: value.confidence,
+        fallback: value.fallback
       })),
     moduleStatus: {
       risk: statusGroup([sources.yahoo]),
@@ -1353,9 +1403,14 @@ function renderSources(items) {
     <article class="source-card quality-${escapeHtml(item.dataQuality || item.status)}">
       <span class="source-state ${item.status}">${statusLabel(item.status, item.key)}</span>
       <strong>${escapeHtml(item.label)}</strong>
-      <p>${sourceRole(item.key)}<br>最后更新：${escapeHtml(sourceUpdatedLabel(item))} · ${escapeHtml(sourceAgeLabel(item.updatedAt))}<br>参与评分：${escapeHtml(sourceScoringLabel(item))}</p>
+      <p>Source：${escapeHtml(item.source || item.label)}<br>Status：${escapeHtml(statusLabel(item.status, item.key))}<br>Latency：${escapeHtml(sourceLatencyLabel(item.latency))} · Freshness：${escapeHtml(item.freshness || sourceAgeLabel(item.updatedAt))}<br>Confidence：${escapeHtml(item.confidence || confidenceLabelByStatus(item.status))} · Fallback：${escapeHtml(item.fallback ? "YES" : "NO")}<br>参与评分：${escapeHtml(sourceScoringLabel(item))}</p>
     </article>
   `).join(""));
+}
+
+function sourceLatencyLabel(latency) {
+  if (!Number.isFinite(Number(latency))) return "stale";
+  return `${Math.max(0, Math.round(Number(latency)))}ms`;
 }
 
 function sourceUpdatedLabel(item) {
@@ -1382,6 +1437,10 @@ function sourceRole(key) {
     twelveData: "TwelveData 跨资产行情：补充指数、外汇与商品。",
     alphavantage: "AlphaVantage 宏观层：收益率、板块、财报日历。",
     fred: "FRED 宏观层：利率、失业与通胀结构。",
+    earnings: "Earnings Layer：财报日历与财报催化强度。",
+    insider: "Insider Layer：内部人交易方向与强度。",
+    relativeVolume: "Relative Volume Scanner：盘前量能扩张识别。",
+    marketBreadth: "Market Breadth Engine：市场参与度与广度评分。",
     yahoo: "指数、价格、盘前涨跌基础数据。",
     tradingView: "趋势筛选与强势股池。",
     finnhubInsider: "机构行为层：内部人交易线索。",
