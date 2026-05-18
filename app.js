@@ -14,6 +14,7 @@ const sourceCatalog = {
   earnings: "Earnings Layer",
   insider: "Insider Layer",
   relativeVolume: "Relative Volume Scanner",
+  premarketMomentum: "Premarket Momentum Engine",
   marketBreadth: "Market Breadth Engine",
   marketData: "Multi-source Market Data / Finnhub primary",
   tradingView: "TradingView Screener",
@@ -287,6 +288,7 @@ function fallbackSources() {
     earnings: fallbackSource("earnings", { events: [] }),
     insider: fallbackSource("insider", { signals: [] }),
     relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
+    premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
     marketBreadth: fallbackSource("marketBreadth", {}),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
     finnhubInsider: fallbackSource("finnhubInsider", []),
@@ -470,6 +472,7 @@ function buildDashboard(sources) {
   const newsItems = Array.isArray(sources.benzinga?.data?.news) ? sources.benzinga.data.news : [];
   const newsForScoring = scoreEligible.news ? newsItems : [];
   const options = normalizeOptions(sources.unusualWhales.data, sources.unusualWhales);
+  const premarketMomentum = normalizePremarketMomentum(sources.premarketMomentum?.data?.leaders || [], sources.premarketMomentum);
   const optionsForScoring = scoreEligible.options ? options : [];
   const retailForScoring = scoreEligible.retail ? retail : {};
   const risk = indicesForScoring.length
@@ -524,6 +527,7 @@ function buildDashboard(sources) {
       mover: statusGroup([sources.benzinga]),
       star: statusGroup([sources.tradingView]),
       opportunity: statusGroup([sources.marketData, sources.finviz, sources.reddit, sources.benzinga]),
+      momentum: statusGroup([sources.premarketMomentum, sources.marketData, sources.relativeVolume]),
       tradePlan: statusGroup([sources.marketData, sources.finviz, sources.unusualWhales]),
       news: statusGroup([sources.benzinga]),
       macro: statusGroup([sources.xMacro]),
@@ -537,6 +541,7 @@ function buildDashboard(sources) {
     retail,
     options,
     opportunities,
+    premarketMomentum,
     tradePlan,
     scannerStatus: buildScannerStatus(opportunities, flows, risk),
     flows,
@@ -712,6 +717,25 @@ function normalizeOptions(items = [], source = {}) {
       risk: item.risk || "风险：代理信号只作辅助，需等待开盘量价确认。"
     };
   }).slice(0, 6);
+}
+
+function normalizePremarketMomentum(items = [], source = {}) {
+  return (items || [])
+    .filter((item) => item?.symbol || item?.ticker)
+    .map((item) => ({
+      symbol: item.symbol || item.ticker,
+      ticker: item.ticker || item.symbol,
+      sector: item.sector || symbolMeta[item.symbol || item.ticker]?.[1] || "其他",
+      theme: item.theme || "Momentum",
+      premarketPercent: Number(item.premarketPercent ?? item.preMarketChange ?? item.change ?? 0),
+      relativeVolume: Number(item.relativeVolume || 1),
+      catalyst: item.catalyst || "等待新闻催化或量能确认。",
+      momentumScore: clamp(Math.round(item.momentumScore ?? item.score ?? 0)),
+      dataQuality: normalizeDataQuality(item.dataQuality || source.status || source.dataQuality),
+      source: source.label || "Premarket Momentum Engine"
+    }))
+    .sort((a, b) => b.momentumScore - a.momentumScore)
+    .slice(0, 10);
 }
 
 function normalizeMovers(items = [], quoteMap, quotes = []) {
@@ -1295,6 +1319,7 @@ function render(dashboard) {
   renderRetail(dashboard.retail, dashboard.moduleStatus.retail);
   renderOptions(dashboard.options);
   renderOpportunities(dashboard.opportunities);
+  renderPremarketMomentum(dashboard.premarketMomentum);
   renderTradePlan(dashboard.tradePlan);
   renderMetricGrid("#sentimentGrid", dashboard.sentiment, "sentiment");
   renderMoverTable(dashboard.movers);
@@ -1313,6 +1338,7 @@ function renderModuleStatus(statusMap) {
     mover: ["#moverModuleMeta"],
     star: ["#starModuleMeta"],
     opportunity: ["#opportunityModuleMeta"],
+    momentum: ["#momentumModuleMeta"],
     tradePlan: ["#tradePlanModuleMeta"],
     news: ["#newsModuleMeta"],
     macro: ["#macroModuleMeta"],
@@ -1575,6 +1601,31 @@ function renderOpportunities(items) {
       </div>
       <div class="risk-tags">
         ${item.riskTags.map((tag) => `<span>${escapeHtml(displayTradeState(tag))}</span>`).join("")}
+      </div>
+    </article>
+  `).join(""));
+}
+
+function renderPremarketMomentum(items) {
+  if (!items?.length) {
+    html("#momentumGrid", `<div class="empty-state">暂无有效盘前动能数据，等待下一次实时快照刷新。</div>`);
+    return;
+  }
+  html("#momentumGrid", items.map((item, index) => `
+    <article class="opportunity-card ${item.momentumScore >= 80 ? "signal-long" : item.momentumScore >= 65 ? "signal-watch" : "signal-ignore"} quality-${escapeHtml(item.dataQuality || "snapshot")}">
+      <div class="opportunity-head">
+        <div>
+          <strong>${escapeHtml(item.symbol)}</strong>
+          <span>${escapeHtml(item.sector)} · ${escapeHtml(item.theme)}</span>
+        </div>
+        <b>${Number(item.momentumScore || 0)}</b>
+      </div>
+      <div class="signal-pill">#${index + 1} MOMENTUM SCORE</div>
+      <p>${escapeHtml(item.catalyst)}</p>
+      <div class="opportunity-meta">
+        <span>盘前 ${signed(item.premarketPercent)}</span>
+        <span>RVOL ${Number(item.relativeVolume || 0).toFixed(2)}x</span>
+        <span>${escapeHtml(statusLabel(item.dataQuality || "delayed"))}</span>
       </div>
     </article>
   `).join(""));

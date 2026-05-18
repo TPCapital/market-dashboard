@@ -24,6 +24,7 @@ const sourceCatalog = {
   earnings: "Earnings Layer",
   insider: "Insider Layer",
   relativeVolume: "Relative Volume Scanner",
+  premarketMomentum: "Premarket Momentum Engine",
   marketBreadth: "Market Breadth Engine",
   marketData: "Multi-source Market Data",
   tradingView: "TradingView Screener",
@@ -1277,6 +1278,92 @@ function deriveOptionsProxy(quotes, context = {}) {
     .slice(0, 6);
 }
 
+function buildPremarketMomentumEngine({ quotes = [], tradingView = [], relativeVolume = [], news = [], marketStatus = "unavailable" } = {}) {
+  if (!["live", "delayed"].includes(String(marketStatus).toLowerCase())) {
+    return {
+      status: "unavailable",
+      source: "Premarket Momentum Engine",
+      confidence: "LOW",
+      fallback: false,
+      error: "market_data_not_live_or_delayed",
+      leaders: []
+    };
+  }
+  const liveQuotes = (quotes || []).filter((item) => item?.symbol && Number.isFinite(Number(item.price)) && Number(item.price) > 0);
+  if (!liveQuotes.length) {
+    return {
+      status: "unavailable",
+      source: "Premarket Momentum Engine",
+      confidence: "LOW",
+      fallback: false,
+      error: "no_realtime_quotes",
+      leaders: []
+    };
+  }
+
+  const tvMap = new Map((tradingView || []).map((item) => [item.symbol, item]));
+  const rvolMap = new Map((relativeVolume || []).map((item) => [item.symbol, item]));
+  const newsMap = new Map((news || []).filter((item) => item?.ticker).map((item) => [item.ticker, item]));
+  const leaders = liveQuotes
+    .map((stock) => {
+      const symbol = stock.symbol;
+      const tv = tvMap.get(symbol) || {};
+      const rv = rvolMap.get(symbol) || {};
+      const catalystNews = newsMap.get(symbol);
+      const premarketPercent = Number(stock.preMarketChangePercent ?? stock.preMarketChange ?? stock.regularMarketChangePercent ?? stock.change ?? 0);
+      const relativeVolumeValue = Number(rv.relativeVolume || stock.realRelativeVolume || stock.relativeVolume || stock.volumeRatio || 1);
+      const gapScore = clamp(Math.max(0, premarketPercent) * 9, 0, 35);
+      const volumeScore = clamp((relativeVolumeValue - 1) * 18 + (relativeVolumeValue >= 1.5 ? 8 : 0), 0, 25);
+      const tvScore = clamp(Number(tv.score || 50) * 0.22 + Math.max(0, Number(tv.change || 0)) * 2, 0, 20);
+      const catalystScore = catalystNews ? (catalystNews.bias === "BEARISH" ? 4 : catalystNews.bias === "BULLISH" ? 15 : 9) : 0;
+      const theme = classifyPremarketTheme(stock, catalystNews);
+      const themeScore = ["AI", "Semis", "Cybersecurity", "EV", "Meme", "Biotech", "Crypto"].includes(theme) ? 5 : 0;
+      const momentumScore = clamp(Math.round(gapScore + volumeScore + tvScore + catalystScore + themeScore));
+
+      return {
+        ticker: symbol,
+        symbol,
+        name: stock.name,
+        sector: stock.sector || symbolMeta[symbol]?.[1] || "其他",
+        theme,
+        premarketPercent,
+        relativeVolume: relativeVolumeValue,
+        catalyst: catalystNews
+          ? `${typeLabel(catalystNews.type || catalystNews.category || "news")}｜${catalystNews.summary || catalystNews.title}`
+          : relativeVolumeValue >= 1.5
+            ? "相对成交量扩张，等待开盘延续确认。"
+            : "价格进入盘前动能扫描，等待新闻或量能确认。",
+        momentumScore,
+        dataQuality: marketStatus,
+        source: "Finnhub / TradingView / Relative Volume / News Catalyst"
+      };
+    })
+    .filter((item) => item.momentumScore > 0)
+    .sort((a, b) => b.momentumScore - a.momentumScore)
+    .slice(0, 10);
+
+  return {
+    status: leaders.length ? (marketStatus === "live" ? "live" : "delayed") : "unavailable",
+    source: "Premarket Momentum Engine",
+    confidence: marketStatus === "live" ? "HIGH" : "MEDIUM",
+    fallback: false,
+    leaders
+  };
+}
+
+function classifyPremarketTheme(stock, catalystNews) {
+  const symbol = stock.symbol || "";
+  const sector = `${stock.sector || ""} ${catalystNews?.title || ""} ${catalystNews?.summary || ""}`;
+  if (/NVDA|AMD|AVGO|MRVL|SMCI|半导体|芯片|semiconductor|chip/i.test(`${symbol} ${sector}`)) return "Semis";
+  if (/PLTR|ORCL|MSFT|AI 软件|AI|data center|artificial intelligence/i.test(`${symbol} ${sector}`)) return "AI";
+  if (/CRWD|PANW|网络安全|云安全|cyber/i.test(`${symbol} ${sector}`)) return "Cybersecurity";
+  if (/TSLA|RIVN|LCID|EV|电动车|robotaxi/i.test(`${symbol} ${sector}`)) return "EV";
+  if (/GME|AMC|KOSS|BB|meme/i.test(`${symbol} ${sector}`)) return "Meme";
+  if (/LLY|MRNA|BIIB|REGN|PFE|FDA|drug|trial|医疗|biotech/i.test(`${symbol} ${sector}`)) return "Biotech";
+  if (/COIN|MSTR|crypto|bitcoin|加密/i.test(`${symbol} ${sector}`)) return "Crypto";
+  return "Momentum";
+}
+
 function calculateOptionsProxyScore(stock, context = {}) {
   const sectorMap = new Map((context.sectors || []).map((item) => [item.sector, item]));
   const mentionMap = new Map(context.reddit?.mentions || []);
@@ -1419,6 +1506,18 @@ export async function buildSnapshot(req) {
     quotes,
     tradingView: tradingView.data || []
   }), generatedAt, { leaders: [] }, "Relative Volume Scanner");
+  const premarketMomentumData = buildPremarketMomentumEngine({
+    quotes,
+    tradingView: tradingView.data || [],
+    relativeVolume: relativeVolumeLayer.data?.leaders || [],
+    news,
+    marketStatus: marketData.status || "unavailable"
+  });
+  const premarketMomentumLayer = source("premarketMomentum", premarketMomentumData, premarketMomentumData.status, generatedAt, "Premarket Momentum Engine", {
+    confidence: premarketMomentumData.confidence,
+    fallback: false,
+    error: premarketMomentumData.error || null
+  });
   const optionProxyData = quotes.length ? deriveOptionsProxy(quotes, {
     sectors: sectorData,
     tradingView: tradingView.data || [],
@@ -1490,6 +1589,7 @@ export async function buildSnapshot(req) {
       earnings: earningsLayer.data || { events: [] },
       insider: insiderLayer.data || { signals: [] },
       relativeVolume: relativeVolumeLayer.data || { leaders: [] },
+      premarketMomentum: premarketMomentumData,
       institutionalBehavior: {
         insider: insiderLayer.data?.signals || insider.data || [],
         earnings: earningsLayer.data?.events || earnings.data || [],
@@ -1512,6 +1612,7 @@ export async function buildSnapshot(req) {
         earnings: earningsLayer,
         insider: insiderLayer,
         relativeVolume: relativeVolumeLayer,
+        premarketMomentum: premarketMomentumLayer,
         marketBreadth: marketBreadthLayer,
         marketData: normalizedMarketDataSource,
         reddit,
@@ -1576,6 +1677,7 @@ export default async function handler(req, res) {
         earnings: fallbackSource("earnings", { events: [] }),
         insider: fallbackSource("insider", { signals: [] }),
         relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
+        premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
         marketBreadth: fallbackSource("marketBreadth", {}),
         marketData: fallbackSource("marketData", { indices: lastGoodIndices(), quotes: lastGoodQuotes() }),
         reddit: fallbackSource("reddit", { score: null, tone: "UNAVAILABLE", mentions: [], summary: "数据源不可用。" }),
