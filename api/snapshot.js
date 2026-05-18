@@ -1,4 +1,7 @@
 import { cleanSymbols, fetchJson, noStoreJson } from "./_utils.js";
+import { buildMarketBreadth } from "./market-breadth.js";
+import { runPremarketScanner } from "./premarket-scanner.js";
+import { buildSignalEngine } from "./signal-engine.js";
 
 const MARKET_SYMBOLS = {
   SPY: "SPY",
@@ -13,6 +16,8 @@ const MARKET_SYMBOLS = {
 const sourceCatalog = {
   finnhub: "Finnhub",
   twelveData: "TwelveData",
+  alphavantage: "AlphaVantage",
+  fred: "FRED",
   yahoo: "Market Data Adapter",
   tradingView: "TradingView Screener",
   xMacro: "Macro Feed",
@@ -217,16 +222,16 @@ async function settleSource(key, loader, generatedAt, fallbackData = null, label
 
 async function fetchWithFallback(symbol) {
   try {
-    const yahoo = await fetchYahooQuote(symbol);
-    if (yahoo) return { ...yahoo, dataStatus: "LIVE" };
-  } catch {}
-  try {
     const stooq = await fetchStooqQuote(symbol);
     if (stooq) return { ...stooq, dataStatus: "DELAYED" };
   } catch {}
   try {
     const alpha = await fetchAlphaDemo(symbol);
     if (alpha) return { ...alpha, dataStatus: "DELAYED" };
+  } catch {}
+  try {
+    const yahoo = await fetchYahooQuote(symbol);
+    if (yahoo) return { ...yahoo, dataStatus: "DELAYED" };
   } catch {}
   return null;
 }
@@ -555,6 +560,90 @@ async function loadFinnhubNews(symbols) {
     : { data: [], status: "unavailable", label: "Finnhub News", error: "Finnhub returned no usable news" };
 }
 
+async function loadFinnhubInsider(symbols) {
+  const token = process.env.FINNHUB_API_KEY;
+  if (!token) return { data: [], status: "unavailable", label: "Finnhub Insider", error: "FINNHUB_API_KEY is not configured" };
+  const tickers = cleanSymbols(symbols).split(",").filter((symbol) => symbolMeta[symbol]).slice(0, 12);
+  const rows = await Promise.all(tickers.map(async (symbol) => {
+    try {
+      const payload = await fetchJson(`https://finnhub.io/api/v1/stock/insider-transactions?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+      const tx = (payload.data || []).slice(0, 3).map((item) => ({
+        symbol,
+        name: item.name,
+        share: Number(item.share || 0),
+        change: Number(item.change || 0),
+        transactionCode: item.transactionCode,
+        transactionDate: item.transactionDate
+      }));
+      return tx;
+    } catch {
+      return [];
+    }
+  }));
+  const data = rows.flat();
+  return data.length
+    ? { data, status: "delayed", label: "Finnhub Insider" }
+    : { data: [], status: "unavailable", label: "Finnhub Insider", error: "Finnhub insider unavailable" };
+}
+
+async function loadFinnhubEarnings(symbols) {
+  const token = process.env.FINNHUB_API_KEY;
+  if (!token) return { data: [], status: "unavailable", label: "Finnhub Earnings", error: "FINNHUB_API_KEY is not configured" };
+  try {
+    const payload = await fetchJson(`https://finnhub.io/api/v1/calendar/earnings?token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+    const list = (payload.earningsCalendar || [])
+      .filter((item) => cleanSymbols(symbols).split(",").includes(item.symbol))
+      .slice(0, 20)
+      .map((item) => ({
+        symbol: item.symbol,
+        date: item.date,
+        epsActual: item.epsActual,
+        epsEstimate: item.epsEstimate,
+        revenueActual: item.revenueActual,
+        revenueEstimate: item.revenueEstimate
+      }));
+    return list.length
+      ? { data: list, status: "delayed", label: "Finnhub Earnings" }
+      : { data: [], status: "unavailable", label: "Finnhub Earnings", error: "Finnhub earnings unavailable" };
+  } catch (error) {
+    return { data: [], status: "unavailable", label: "Finnhub Earnings", error: error.message };
+  }
+}
+
+async function loadAlphaVantageMacro() {
+  const token = process.env.ALPHAVANTAGE_API_KEY;
+  if (!token) return { data: null, status: "unavailable", label: "AlphaVantage", error: "ALPHAVANTAGE_API_KEY is not configured" };
+  try {
+    const [dgs10, dgs2, sector] = await Promise.all([
+      fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null),
+      fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=2year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null),
+      fetchJson(`https://www.alphavantage.co/query?function=SECTOR&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch(() => null)
+    ]);
+    if (!dgs10 && !dgs2 && !sector) return { data: null, status: "unavailable", label: "AlphaVantage", error: "AlphaVantage macro unavailable" };
+    return { data: { dgs10, dgs2, sector }, status: "delayed", label: "AlphaVantage" };
+  } catch (error) {
+    return { data: null, status: "unavailable", label: "AlphaVantage", error: error.message };
+  }
+}
+
+async function loadFredMacro() {
+  const token = process.env.FRED_API_KEY;
+  if (!token) return { data: [], status: "unavailable", label: "FRED", error: "FRED_API_KEY is not configured" };
+  const ids = ["FEDFUNDS", "DGS10", "DGS2", "UNRATE", "CPIAUCSL"];
+  const data = await Promise.all(ids.map(async (id) => {
+    try {
+      const payload = await fetchJson(`https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(id)}&api_key=${encodeURIComponent(token)}&file_type=json&sort_order=desc&limit=1`, { timeoutMs: 9000 });
+      const latest = payload.observations?.[0];
+      return { id, date: latest?.date, value: latest?.value };
+    } catch {
+      return { id, value: null };
+    }
+  }));
+  return data.some((item) => item.value !== null)
+    ? { data, status: "delayed", label: "FRED" }
+    : { data: [], status: "unavailable", label: "FRED", error: "FRED unavailable" };
+}
+
 async function fetchText(url) {
   const response = await fetch(url, {
     cache: "no-store",
@@ -570,6 +659,8 @@ function stripXml(value) {
 
 function analyzeNews(news) {
   if (!news?.title || news.title.toLowerCase().includes("market update") || news.title.length < 15 || String(news.summary || "").length < 10) return null;
+  const junkPattern = /(is .* a buy|top \d+ stocks|etf to buy|could be huge|millionaire maker|prediction|week ahead|opinion|motley fool|worth buying|best stocks to buy)/i;
+  if (junkPattern.test(`${news.title} ${news.summary || ""}`)) return null;
   const ticker = news.relatedSymbol || extractTicker(news);
   const type = detectNewsType(news);
   if (!ticker && !isMarketRelevantNews(news, type)) return null;
@@ -817,7 +908,7 @@ export async function buildSnapshot(req) {
   const defaultSymbols = "SPY,QQQ,NVDA,AMD,AVGO,MRVL,MSFT,AMZN,META,TSLA,PLTR,ORCL,CRWD,COIN,MSTR,DASH,CSCO,LLY,AAPL";
   const symbols = cleanSymbols(req?.query?.symbols || defaultSymbols);
   const marketSymbols = `${Object.values(MARKET_SYMBOLS).join(",")},${symbols}`;
-  const [finnhub, twelveData, tradingView] = await Promise.all([
+  const [finnhub, twelveData, tradingView, insider, earnings, alphaMacro, fredMacro] = await Promise.all([
     settleSource("finnhub", async () => {
       const data = await loadFinnhubQuotes(marketSymbols);
       return { data, status: data.length ? "live" : "unavailable", label: "Finnhub" };
@@ -826,7 +917,11 @@ export async function buildSnapshot(req) {
       const data = await loadTwelveDataQuotes(marketSymbols);
       return { data, status: data.length ? "delayed" : "unavailable", label: "TwelveData" };
     }, generatedAt, []),
-    settleSource("tradingView", loadTradingView, generatedAt, [])
+    settleSource("tradingView", loadTradingView, generatedAt, []),
+    settleSource("finnhubInsider", () => loadFinnhubInsider(symbols), generatedAt, [], "Finnhub Insider"),
+    settleSource("finnhubEarnings", () => loadFinnhubEarnings(symbols), generatedAt, [], "Finnhub Earnings"),
+    settleSource("alphavantage", loadAlphaVantageMacro, generatedAt, null, "AlphaVantage"),
+    settleSource("fred", loadFredMacro, generatedAt, [], "FRED")
   ]);
   const yahoo = await settleSource("yahoo", () => loadMarketData(symbols, {
     finnhub: finnhub.data || [],
@@ -849,6 +944,14 @@ export async function buildSnapshot(req) {
   const moverData = deriveMovers(quotes, news);
   const optionProxyData = deriveOptionsProxy(quotes, { sectors: sectorData, tradingView: tradingView.data || [], reddit: reddit.data || {}, news });
   const riskRegime = calculateRiskRegime(yahoo.data?.indices || snapshotIndices);
+  const marketBreadth = buildMarketBreadth({ quotes, sectors: sectorData, indices: yahoo.data?.indices || snapshotIndices });
+  const premarketScanner = runPremarketScanner({ quotes, news });
+  const signalEngine = buildSignalEngine({
+    indices: yahoo.data?.indices || snapshotIndices,
+    scanner: premarketScanner,
+    breadth: marketBreadth,
+    risk: riskRegime
+  });
 
   const finviz = keepLastGood("finviz", source("finviz", sectorData, "proxy", generatedAt, "Sector Heat Proxy"));
   const benzinga = keepLastGood("benzinga", source("benzinga", { movers: moverData.length ? moverData : deriveMovers(snapshotQuotes, news), news }, "proxy", generatedAt, "News Catalyst Proxy"));
@@ -858,14 +961,37 @@ export async function buildSnapshot(req) {
   ], "proxy", generatedAt, "Macro Risk Proxy");
 
   const snapshot = {
-      generatedAt,
-      riskRegime,
-      sources: {
+    generatedAt,
+    riskRegime,
+    layers: {
+      realtimeQuotes: {
+        sourcePriority: ["Finnhub", "TwelveData", "TradingView", "Yahoo", "Stooq", "Snapshot"],
+        confidence: finnhub.status === "live" || twelveData.status === "delayed" ? "中高" : "低",
+        freshness: nowIso(generatedAt)
+      },
+      marketStructure: marketBreadth,
+      institutionalBehavior: {
+        insider: insider.data || [],
+        earnings: earnings.data || [],
+        confidence: insider.status === "delayed" || earnings.status === "delayed" ? "中" : "低"
+      },
+      newsCatalyst: {
+        topSource: Array.isArray(finnhubNews.data) && finnhubNews.data.length ? "Finnhub" : Array.isArray(yahooNews.data) && yahooNews.data.length ? "Yahoo RSS" : "Snapshot",
+        total: news.length
+      },
+      tradeSignals: signalEngine,
+      premarketScanner
+    },
+    sources: {
         finnhub,
         twelveData,
+        alphavantage: alphaMacro,
+        fred: fredMacro,
         yahoo,
         reddit,
         tradingView,
+        finnhubInsider: insider,
+        finnhubEarnings: earnings,
         xMacro,
         finviz,
         unusualWhales,

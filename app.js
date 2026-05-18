@@ -7,9 +7,13 @@ const CACHE_TRADABLE_MS = 15 * 60 * 1000;
 const sourceCatalog = {
   finnhub: "Finnhub",
   twelveData: "TwelveData",
+  alphavantage: "AlphaVantage",
+  fred: "FRED",
   yahoo: "Yahoo Finance",
   tradingView: "TradingView Screener",
   xMacro: "Walter Bloomberg X / Kobeissi X",
+  finnhubInsider: "Finnhub Insider",
+  finnhubEarnings: "Finnhub Earnings",
   reddit: "WallStreetBets Reddit",
   finviz: "Finviz Heatmap",
   unusualWhales: "Options Flow Proxy",
@@ -409,9 +413,11 @@ function hasSnapshotData(data) {
 }
 
 async function loadAllSources() {
-  const [finnhub, twelveData, yahoo, tradingView, xMacro, reddit, finviz, unusualWhales, benzinga] = await Promise.all([
+  const [finnhub, twelveData, alphavantage, fred, yahoo, tradingView, xMacro, reddit, finviz, unusualWhales, benzinga] = await Promise.all([
     withFallback("finnhub", () => loadProviderStatus("finnhub"), []),
     withFallback("twelveData", () => loadProviderStatus("twelveData"), []),
+    withFallback("alphavantage", () => loadProviderStatus("alphavantage"), null),
+    withFallback("fred", () => loadProviderStatus("fred"), []),
     withFallback("yahoo", loadYahoo, fallback.yahoo),
     withFallback("tradingView", () => loadConfiguredArray("tradingViewScreener", fallback.tradingView), fallback.tradingView),
     withFallback("xMacro", () => loadConfiguredArray("xMacro", fallback.xMacro), fallback.xMacro),
@@ -424,6 +430,8 @@ async function loadAllSources() {
   return {
     finnhub,
     twelveData,
+    alphavantage,
+    fred,
     yahoo,
     tradingView,
     xMacro,
@@ -471,7 +479,11 @@ function fallbackSources() {
     yahoo: fallbackSource("yahoo", fallback.yahoo),
     finnhub: fallbackSource("finnhub", []),
     twelveData: fallbackSource("twelveData", []),
+    alphavantage: fallbackSource("alphavantage", null),
+    fred: fallbackSource("fred", []),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
+    finnhubInsider: fallbackSource("finnhubInsider", []),
+    finnhubEarnings: fallbackSource("finnhubEarnings", []),
     xMacro: fallbackSource("xMacro", fallback.xMacro),
     reddit: fallbackSource("reddit", fallback.reddit),
     finviz: fallbackSource("finviz", fallback.finviz),
@@ -1560,8 +1572,12 @@ function sourceRole(key) {
   return {
     finnhub: "Finnhub 行情与新闻：有 API key 时作为优先源。",
     twelveData: "TwelveData 跨资产行情：补充指数、外汇与商品。",
+    alphavantage: "AlphaVantage 宏观层：收益率、板块、财报日历。",
+    fred: "FRED 宏观层：利率、失业与通胀结构。",
     yahoo: "指数、价格、盘前涨跌基础数据。",
     tradingView: "趋势筛选与强势股池。",
+    finnhubInsider: "机构行为层：内部人交易线索。",
+    finnhubEarnings: "财报驱动层：财报日历与预期偏差。",
     xMacro: "宏观快讯，不参与个股新闻。",
     reddit: "散户情绪，只读取 WSB。",
     finviz: "热钱板块：Finviz 适配器或 Yahoo 板块代理。",

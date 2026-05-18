@@ -16,9 +16,24 @@
 - Options Flow Proxy 不是真实机构期权大单流，只是基于价格动量、相对成交量、板块热度、新闻情绪、相对强弱、盘前涨跌和散户关注生成的代理信号。
 - 要得到真实每日变化的期权流、新闻和热钱排行，需要接入对应授权 API 或可用代理。
 
+## 分层架构
+
+- Layer 1 实时行情层：Finnhub + TradingView + AlphaVantage + TwelveData + Stooq + Snapshot fallback
+- Layer 2 市场结构层：Advance/Decline、Breadth、Sector Rotation、Index Confirmation
+- Layer 3 机构行为层：Finnhub Insider / Earnings（无 key 自动降级）
+- Layer 4 新闻催化层：Benzinga -> Finnhub company/market news -> Yahoo RSS -> Snapshot
+- Layer 5 交易信号层：Premarket Scanner + Signal Engine
+
+## 行情优先级
+
+- 指数：`TwelveData -> Finnhub -> TradingView -> AlphaVantage -> Stooq -> Yahoo -> Snapshot`
+- 个股：`Finnhub -> TwelveData -> TradingView -> AlphaVantage -> Stooq -> Yahoo -> Snapshot`
+- 新闻：`Benzinga -> Finnhub company/market news -> Yahoo RSS -> Snapshot`
+
 ## 当前免费版数据限制
 
 - 推荐在 Vercel Environment Variables 添加 `FINNHUB_API_KEY` 与 `TWELVEDATA_API_KEY`。不添加也能运行，但 Finnhub / TwelveData 会显示 `UNAVAILABLE`，系统会降级到 Yahoo / Stooq / proxy / snapshot。
+- 建议补充 `ALPHAVANTAGE_API_KEY`、`FRED_API_KEY` 用于宏观层和结构层。
 - `TRADIER_TOKEN` 可预留给未来真实期权数据；当前版本不会使用它，也不会因为未配置而报错。
 - 没有真实 Unusual Whales / Cheddar Flow / Polygon Options 级别的期权大单流。
 - 没有真实 Benzinga 授权新闻 API，Yahoo RSS 与新闻代理可能延迟。
@@ -87,6 +102,8 @@ window.DASHBOARD_CONFIG = {
     snapshot: "/api/snapshot",
     finnhub: "/api/finnhub",
     twelvedata: "/api/twelvedata",
+    alphavantage: "/api/alphavantage",
+    fred: "/api/fred",
     yahoo: "/api/yahoo",
     reddit: "/api/reddit",
     xMacro: "/api/x-macro",

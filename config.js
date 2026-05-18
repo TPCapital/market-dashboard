@@ -8,6 +8,8 @@ window.DASHBOARD_CONFIG = {
     snapshot: "/api/snapshot",
     finnhub: "/api/finnhub",
     twelvedata: "/api/twelvedata",
+    alphavantage: "/api/alphavantage",
+    fred: "/api/fred",
     yahoo: "/api/yahoo",
     reddit: "/api/reddit",
     xMacro: "/api/x-macro",

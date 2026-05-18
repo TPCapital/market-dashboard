@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { buildSnapshot } from "../api/snapshot.js";
 import finnhubHandler from "../api/finnhub.js";
 import twelveDataHandler from "../api/twelvedata.js";
+import alphavantageHandler from "../api/alphavantage.js";
+import fredHandler from "../api/fred.js";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const port = Number(process.env.PORT || 4173);
@@ -170,6 +172,14 @@ async function handleApi(req, res, url) {
 
     if (url.pathname === "/api/twelvedata") {
       return runVercelHandler(twelveDataHandler, req, res, url);
+    }
+
+    if (url.pathname === "/api/alphavantage") {
+      return runVercelHandler(alphavantageHandler, req, res, url);
+    }
+
+    if (url.pathname === "/api/fred") {
+      return runVercelHandler(fredHandler, req, res, url);
     }
 
     if (url.pathname === "/api/yahoo") {
