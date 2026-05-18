@@ -103,6 +103,16 @@ const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
 const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 
+function envDebug() {
+  return {
+    FINNHUB_API_KEY: !!process.env.FINNHUB_API_KEY,
+    TWELVEDATA_API_KEY: !!process.env.TWELVEDATA_API_KEY,
+    ALPHAVANTAGE_API_KEY: !!process.env.ALPHAVANTAGE_API_KEY,
+    FRED_API_KEY: !!process.env.FRED_API_KEY,
+    TEST_ENV_CHECK: process.env.TEST_ENV_CHECK || null
+  };
+}
+
 function lastGoodIndices() {
   return lastGoodSnapshot?.sources?.marketData?.data?.indices || [];
 }
@@ -1478,6 +1488,7 @@ export async function buildSnapshot(req) {
 
   const snapshot = {
     generatedAt,
+    envDebug: envDebug(),
     riskRegime,
     layers: {
       realtimeQuotes: {
@@ -1555,6 +1566,7 @@ export default async function handler(req, res) {
     }
     noStoreJson(res, 200, {
       generatedAt: Date.now(),
+      envDebug: envDebug(),
       servedFrom: "emergency-snapshot",
       error: error.message,
       sources: {
