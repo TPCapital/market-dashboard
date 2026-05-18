@@ -70,70 +70,15 @@ const symbolMeta = {
   UEC: ["Uranium Energy", "铀矿"]
 };
 
-const snapshotIndices = [
-  metric("SPY", "S&P 500 ETF", 739.17, -1.2, "SNAPSHOT：宽基风险资产。"),
-  metric("QQQ", "NASDAQ ETF", 708.93, -1.51, "SNAPSHOT：科技权重代理。"),
-  metric("NDX", "NASDAQ 100", 25172.18, 0.48, "SNAPSHOT：纳指 100。"),
-  metric("VIX", "VOLATILITY", 13.62, -2.01, "SNAPSHOT：波动率风险锚。"),
-  metric("TNX", "10Y YIELD", 4.12, 0.87, "SNAPSHOT：长端利率。"),
-  metric("DXY", "DOLLAR INDEX", 98.36, -0.11, "SNAPSHOT：美元流动性。"),
-  metric("GOLD", "GOLD", 3378.4, -0.24, "SNAPSHOT：避险资产。")
-];
-
-const snapshotQuotes = [
-  quote("NVDA", 188.2, 2.35, 2.1),
-  quote("AMD", 238.3, 1.64, 1.5),
-  quote("AVGO", 305.7, 1.42, 1.45),
-  quote("PLTR", 227.4, 4.82, 2.9),
-  quote("TSLA", 462.5, 1.76, 1.8),
-  quote("COIN", 358.9, 1.11, 1.4),
-  quote("MSTR", 462.5, 1.76, 1.8),
-  quote("MRVL", 93.4, 2.08, 1.7),
-  quote("MSFT", 421.9, 0.76, 1.2),
-  quote("META", 614.2, 0.68, 1.1),
-  quote("CRWD", 554.8, 1.28, 1.35),
-  quote("LLY", 792.4, -0.64, 1.05),
-  quote("XOM", 117.3, -0.28, 0.9)
-];
-
-const snapshotNews = [
-  {
-    ticker: "NVDA",
-    sector: "AI 半导体",
-    category: "主线",
-    newsType: "AI demand",
-    bias: "BULLISH",
-    title: "NVDA｜AI 芯片龙头买盘关注升温",
-    summary: "机构继续关注 AI 数据中心扩张主线，开盘需确认量能延续。",
-    originalTitle: "NVIDIA remains central to AI data center demand",
-    originalSummary: "Snapshot catalyst retained for terminal continuity.",
-    time: "SNAPSHOT"
-  },
-  {
-    ticker: "AMD",
-    sector: "AI 半导体",
-    category: "主线",
-    newsType: "semiconductor",
-    bias: "BULLISH",
-    title: "AMD｜AI 芯片追赶逻辑继续发酵",
-    summary: "资金继续评估 AMD 在 AI 加速器链条中的弹性。",
-    originalTitle: "Advanced Micro Devices draws attention as an AI GPU beneficiary",
-    originalSummary: "Snapshot catalyst retained for terminal continuity.",
-    time: "SNAPSHOT"
-  },
-  {
-    ticker: "PLTR",
-    sector: "AI 软件",
-    category: "主线",
-    newsType: "AI demand",
-    bias: "BULLISH",
-    title: "PLTR｜AI 软件订单预期维持强势",
-    summary: "AI 软件主线延续，但需等待开盘成交量确认突破质量。",
-    originalTitle: "Palantir remains in focus as AI software demand expands",
-    originalSummary: "Snapshot catalyst retained for terminal continuity.",
-    time: "SNAPSHOT"
-  }
-];
+const MARKET_INDEX_META = {
+  SPY: "S&P 500 ETF",
+  QQQ: "NASDAQ ETF",
+  NDX: "NASDAQ 100",
+  VIX: "VOLATILITY",
+  TNX: "10Y YIELD",
+  DXY: "DOLLAR INDEX",
+  GOLD: "GOLD"
+};
 
 const tvSymbols = [
   "NASDAQ:NVDA",
@@ -158,18 +103,28 @@ const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
 const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 
+function lastGoodIndices() {
+  return lastGoodSnapshot?.sources?.yahoo?.data?.indices || [];
+}
+
+function lastGoodQuotes() {
+  return lastGoodSnapshot?.sources?.yahoo?.data?.quotes || [];
+}
+
 function normalizeDataQuality(status = "") {
   const value = String(status || "").toLowerCase();
-  if (["live", "delayed", "proxy", "cached", "snapshot", "unavailable"].includes(value)) return value;
+  if (["live", "delayed", "snapshot", "stale", "unavailable"].includes(value)) return value;
+  if (value === "proxy" || value === "cached") return "stale";
   if (value === "fallback") return "snapshot";
   if (String(status).toUpperCase() === "LIVE") return "live";
   if (String(status).toUpperCase() === "DELAYED") return "delayed";
   if (String(status).toUpperCase() === "SNAPSHOT") return "snapshot";
+  if (String(status).toUpperCase() === "STALE") return "stale";
   return "snapshot";
 }
 
 function isTradableQuality(dataQuality) {
-  return ["live", "delayed", "proxy"].includes(dataQuality);
+  return ["live", "delayed"].includes(dataQuality);
 }
 
 function metric(id, name, value, change, note, status = "SNAPSHOT") {
@@ -210,8 +165,7 @@ function confidenceFromStatus(status) {
   const s = normalizeDataQuality(status);
   if (s === "live") return "HIGH";
   if (s === "delayed") return "MEDIUM";
-  if (s === "cached") return "MEDIUM";
-  if (s === "proxy") return "LOW";
+  if (s === "stale") return "LOW";
   if (s === "snapshot") return "LOW";
   return "LOW";
 }
@@ -228,7 +182,7 @@ function source(key, data, status, generatedAt, label = sourceCatalog[key], extr
   const dataQuality = normalizeDataQuality(status);
   const updatedAt = Number(extra.updatedAt || generatedAt);
   const confidence = extra.confidence || confidenceFromStatus(dataQuality);
-  const fallback = Boolean(extra.fallback ?? (dataQuality === "snapshot" || dataQuality === "cached" || dataQuality === "proxy"));
+  const fallback = Boolean(extra.fallback ?? (dataQuality === "snapshot" || dataQuality === "stale"));
   return {
     data,
     status: dataQuality,
@@ -250,13 +204,13 @@ function cachedSource(key, cached) {
   const updatedAt = cached.updatedAt || Date.now();
   return {
     ...cached,
-    status: "cached",
+    status: "stale",
     source: cached.source || sourceCatalog[key],
-    dataQuality: "cached",
-    isTradable: true,
+    dataQuality: "stale",
+    isTradable: false,
     timestamp: cached.timestamp || nowIso(updatedAt),
-    confidence: cached.confidence || "MEDIUM",
-    freshness: freshnessFromUpdatedAt(updatedAt, "cached"),
+    confidence: cached.confidence || "LOW",
+    freshness: freshnessFromUpdatedAt(updatedAt, "stale"),
     fallback: true
   };
 }
@@ -279,7 +233,7 @@ function fallbackSource(key, data = null) {
 }
 
 function keepLastGood(key, item) {
-  if (["live", "delayed", "proxy"].includes(item.status) && item.data) lastGoodSources[key] = item;
+  if (["live", "delayed"].includes(item.status) && item.data) lastGoodSources[key] = item;
   return item;
 }
 
@@ -471,13 +425,116 @@ async function loadFinnhubMarketData(symbols) {
       const classified = classifyUpstreamError(error, responseCode);
       lastErrorCode = classified;
       console.error("FINNHUB ERROR:", { symbol, endpoint, responseCode, reason: error.message, classified });
-      return lastGoodFinnhubQuotes.get(symbol) || null;
+      return null;
     }
   }));
   const data = rows.filter(Boolean);
   return data.length
     ? { data, status: "live", label: "Finnhub", latency: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null, confidence: "HIGH", fallback: false }
     : { data: [], status: "unavailable", label: "Finnhub", error: lastErrorCode || "invalid_response", confidence: "LOW", fallback: true };
+}
+
+async function loadFinnhubStrictProbe() {
+  const testSymbols = ["AAPL", "NVDA", "SPY", "QQQ"];
+  const token = process.env.FINNHUB_API_KEY;
+  console.log("FINNHUB_KEY_EXISTS:", !!token);
+  if (!token) {
+    return {
+      status: "UNAVAILABLE",
+      source: "Finnhub",
+      error: "missing_key",
+      testSymbols,
+      quotes: [],
+      confidence: "LOW",
+      fallback: true,
+      participatesInScoring: false
+    };
+  }
+
+  const quotes = [];
+  let finalError = "";
+  for (const symbol of testSymbols) {
+    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`;
+    const safeUrl = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=***`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+    try {
+      console.log("FINNHUB_TEST_SYMBOL:", symbol);
+      console.log("FINNHUB_REQUEST_URL:", safeUrl);
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; AI-Equity-Dashboard/1.0)",
+          Accept: "application/json,text/plain,*/*"
+        }
+      });
+      const bodyText = await response.text();
+      console.log("FINNHUB_RESPONSE_STATUS:", response.status);
+      console.log("FINNHUB_RESPONSE_BODY:", String(bodyText || "").slice(0, 300));
+      if (!response.ok) {
+        if (response.status === 401) finalError = "401_invalid_key";
+        else if (response.status === 403) finalError = "403_forbidden";
+        else if (response.status === 429) finalError = "429_rate_limit";
+        else finalError = `http_${response.status}`;
+        console.error("FINNHUB_ERROR:", finalError);
+        continue;
+      }
+      let payload = null;
+      try {
+        payload = bodyText ? JSON.parse(bodyText) : null;
+      } catch {
+        finalError = "invalid_response";
+        console.error("FINNHUB_ERROR:", finalError);
+        continue;
+      }
+      if (payload?.error) {
+        const msg = String(payload.error || "").toLowerCase();
+        if (msg.includes("invalid api key")) finalError = "401_invalid_key";
+        else finalError = "invalid_response";
+        console.error("FINNHUB_ERROR:", finalError);
+        continue;
+      }
+      const normalized = normalizeProviderQuote(symbol, payload, "Finnhub", "LIVE");
+      if (!normalized) {
+        finalError = "invalid_response";
+        console.error("FINNHUB_ERROR:", finalError);
+        continue;
+      }
+      quotes.push(normalized);
+    } catch (error) {
+      const msg = String(error?.message || "");
+      finalError = msg.toLowerCase().includes("aborted") ? "timeout" : "invalid_response";
+      console.error("FINNHUB_ERROR:", msg);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  if (quotes.length) {
+    return {
+      status: "LIVE",
+      source: "Finnhub",
+      error: null,
+      testSymbols,
+      quotes,
+      confidence: "HIGH",
+      fallback: false,
+      participatesInScoring: true
+    };
+  }
+
+  return {
+    status: "UNAVAILABLE",
+    source: "Finnhub",
+    error: finalError || "invalid_response",
+    testSymbols,
+    quotes: [],
+    confidence: "LOW",
+    fallback: true,
+    participatesInScoring: false
+  };
 }
 
 async function loadTwelveDataMarketData(symbols) {
@@ -617,8 +674,10 @@ function normalizeTradingViewQuote(item = {}) {
 }
 
 function mergeMarketQuotes({ symbols, marketEntries, finnhubRows = [], twelveDataRows = [], tradingViewRows = [], fallbackMarketMap = new Map(), fallbackStockMap = new Map() }) {
-  const snapshotById = new Map(snapshotIndices.map((item) => [item.id, item]));
-  const snapshotBySymbol = new Map(snapshotQuotes.map((item) => [item.symbol, item]));
+  const staleIndices = lastGoodIndices();
+  const staleQuotes = lastGoodQuotes();
+  const snapshotById = new Map(staleIndices.map((item) => [item.id, item]));
+  const snapshotBySymbol = new Map(staleQuotes.map((item) => [item.symbol, item]));
   const finnhubMap = new Map((finnhubRows || []).map((item) => [item.symbol, item]));
   const twelveMap = new Map((twelveDataRows || []).map((item) => [item.symbol, item]));
   const tradingViewMap = new Map((tradingViewRows || []).map((item) => [item.symbol, normalizeTradingViewQuote(item)]).filter(([, row]) => row));
@@ -627,8 +686,12 @@ function mergeMarketQuotes({ symbols, marketEntries, finnhubRows = [], twelveDat
   const indices = marketEntries.map(([id, providerSymbol]) => {
     const fallback = snapshotById.get(id);
     const row = twelveMap.get(providerSymbol) || twelveMap.get(id) || finnhubMap.get(providerSymbol) || finnhubMap.get(id) || fallbackMarketMap.get(id);
-    if (!row) return { ...fallback, note: "SNAPSHOT：行情源暂不可用，使用最近结构快照。", status: "SNAPSHOT" };
-    return metric(id, fallback.name, row.price || fallback.value, row.change ?? fallback.change, `${row.dataStatus}：${row.provider || "行情适配器"}。`, row.dataStatus);
+    if (!row) {
+      if (fallback) return { ...fallback, note: "STALE：实时行情源暂不可用，使用最近有效缓存。", status: "STALE", dataQuality: "stale", isTradable: false };
+      return metric(id, MARKET_INDEX_META[id] || id, null, null, "UNAVAILABLE：无可用指数数据。", "UNAVAILABLE");
+    }
+    const baseName = fallback?.name || MARKET_INDEX_META[id] || id;
+    return metric(id, baseName, row.price ?? fallback?.value ?? null, row.change ?? fallback?.change ?? null, `${row.dataStatus}：${row.provider || "行情适配器"}。`, row.dataStatus);
   });
 
   // Stock priority: Finnhub -> TwelveData -> TradingView -> Yahoo/Stooq/Alpha -> Snapshot
@@ -636,7 +699,7 @@ function mergeMarketQuotes({ symbols, marketEntries, finnhubRows = [], twelveDat
   const quotes = stockSymbols.map((symbol) => {
     const fallback = snapshotBySymbol.get(symbol);
     const row = finnhubMap.get(symbol) || twelveMap.get(symbol) || tradingViewMap.get(symbol) || fallbackStockMap.get(symbol);
-    if (!row && fallback) return { ...fallback, dataStatus: "SNAPSHOT", dataQuality: "snapshot", isTradable: false, source: "Fallback Snapshot" };
+    if (!row && fallback) return { ...fallback, dataStatus: "STALE", status: "stale", dataQuality: "stale", isTradable: false, source: "Last Good Snapshot" };
     if (!row) return null;
     const relativeVolume = row.volume && row.averageVolume ? row.volume / row.averageVolume : fallback?.relativeVolume || 1;
     return quote(symbol, row.price, row.change, relativeVolume, {
@@ -647,7 +710,7 @@ function mergeMarketQuotes({ symbols, marketEntries, finnhubRows = [], twelveDat
     });
   }).filter(Boolean);
 
-  return { indices, quotes: quotes.length ? quotes : snapshotQuotes };
+  return { indices, quotes };
 }
 
 async function loadMarketData(rawSymbols, providerRows = {}) {
@@ -1189,7 +1252,7 @@ function deriveSectors(quotes) {
 }
 
 function deriveMovers(quotes, news = []) {
-  const sourceQuotes = (quotes && quotes.length ? quotes : snapshotQuotes)
+  const sourceQuotes = (quotes && quotes.length ? quotes : [])
     .filter((item) => Number.isFinite(Number(item.preMarketChange ?? item.regularMarketChangePercent)));
   const tickerNews = new Set(news.map((item) => item.ticker).filter(Boolean));
   return [...sourceQuotes].sort((a, b) => {
@@ -1280,6 +1343,9 @@ function flowProxySummary(stock, conviction) {
 }
 
 function calculateRiskRegime(indices) {
+  if (!Array.isArray(indices) || !indices.length) {
+    return { mode: "DATA_UNAVAILABLE", score: null, status: "UNAVAILABLE", reason: "insufficient_realtime_indices" };
+  }
   const byId = Object.fromEntries((indices || []).map((item) => [item.id, item]));
   const qqq = byId.QQQ?.change || byId.NDX?.change || 0;
   const vix = byId.VIX?.change || 0;
@@ -1302,10 +1368,8 @@ export async function buildSnapshot(req) {
   const defaultSymbols = "SPY,QQQ,NVDA,AMD,AVGO,MRVL,MSFT,AMZN,META,TSLA,PLTR,ORCL,CRWD,COIN,MSTR,DASH,CSCO,LLY,AAPL";
   const symbols = cleanSymbols(req?.query?.symbols || defaultSymbols);
   const marketSymbols = `${Object.values(MARKET_SYMBOLS).join(",")},${symbols}`;
-  const [finnhub, twelveData, tradingView, insider, earnings, alphaMacro, fredMacro] = await Promise.all([
-    settleSource("finnhub", async () => {
-      return loadFinnhubMarketData(marketSymbols);
-    }, generatedAt, []),
+  const finnhubProbe = await loadFinnhubStrictProbe();
+  const [twelveData, tradingView, insider, earnings, alphaMacro, fredMacro] = await Promise.all([
     settleSource("twelveData", async () => {
       return loadTwelveDataMarketData(marketSymbols);
     }, generatedAt, []),
@@ -1325,12 +1389,12 @@ export async function buildSnapshot(req) {
     finnhubKey: process.env.FINNHUB_API_KEY || ""
   }), generatedAt, { signals: [] }, "Insider Layer");
   const yahoo = await settleSource("yahoo", () => loadMarketData(symbols, {
-    finnhub: finnhub.data || [],
+    finnhub: finnhubProbe.quotes || [],
     twelveData: twelveData.data || [],
     tradingView: tradingView.data || []
-  }), generatedAt, { indices: snapshotIndices, quotes: snapshotQuotes });
+  }), generatedAt, { indices: lastGoodIndices(), quotes: lastGoodQuotes() });
   const [reddit, benzingaNews, finnhubNews, marketWatchNews, reutersNews, secNews] = await Promise.all([
-    settleSource("reddit", loadReddit, generatedAt, { score: 58, tone: "中性", mentions: [["NVDA", 8], ["TSLA", 6], ["AMD", 5]], summary: "SNAPSHOT：散户关注集中在 AI 与高 beta。" }),
+    settleSource("reddit", loadReddit, generatedAt, { score: null, tone: "UNAVAILABLE", mentions: [], summary: "数据源不可用。" }),
     settleSource("benzinga", loadBenzingaNews, generatedAt, [], "Benzinga API"),
     settleSource("finnhubNews", () => loadFinnhubNews(symbols), generatedAt, [], "Finnhub News"),
     settleSource("marketWatchNews", loadMarketWatchNews, generatedAt, [], "MarketWatch RSS"),
@@ -1338,7 +1402,7 @@ export async function buildSnapshot(req) {
     settleSource("secNews", loadSecFilingsNews, generatedAt, [], "SEC Filing Feed")
   ]);
 
-  const quotes = yahoo.data?.quotes?.length ? yahoo.data.quotes : snapshotQuotes;
+  const quotes = yahoo.data?.quotes?.length ? yahoo.data.quotes : [];
   const finnhubEarningsNews = source("finnhubEarnings", buildEarningsNewsEvents(earnings.data || []), (earnings.data || []).length ? "delayed" : "unavailable", generatedAt, "Finnhub Earnings");
   const finnhubInsiderNews = source("finnhubInsider", buildInsiderNewsEvents(insider.data || []), (insider.data || []).length ? "delayed" : "unavailable", generatedAt, "Finnhub Insider");
   const newsCandidates = [
@@ -1359,7 +1423,7 @@ export async function buildSnapshot(req) {
     quotes,
     tradingView: tradingView.data || []
   }), generatedAt, { leaders: [] }, "Relative Volume Scanner");
-  const optionProxyData = deriveOptionsProxy(quotes, {
+  const optionProxyData = quotes.length ? deriveOptionsProxy(quotes, {
     sectors: sectorData,
     tradingView: tradingView.data || [],
     reddit: reddit.data || {},
@@ -1367,13 +1431,13 @@ export async function buildSnapshot(req) {
     relativeVolume: relativeVolumeLayer.data?.leaders || [],
     earnings: earningsLayer.data?.events || [],
     insider: insiderLayer.data?.signals || []
-  });
-  const riskRegime = calculateRiskRegime(yahoo.data?.indices || snapshotIndices);
+  }) : [];
+  const riskRegime = calculateRiskRegime(yahoo.data?.indices || []);
   const marketBreadthData = buildMarketBreadth({
     quotes,
     sectors: sectorData,
-    indices: yahoo.data?.indices || snapshotIndices,
-    status: yahoo.status === "live" ? "live" : yahoo.status === "delayed" ? "delayed" : "proxy"
+    indices: yahoo.data?.indices || [],
+    status: yahoo.status === "live" ? "live" : yahoo.status === "delayed" ? "delayed" : "stale"
   });
   const marketBreadthLayer = await settleSource("marketBreadth", async () => marketBreadthData, generatedAt, {}, "Market Breadth Engine");
   const premarketScanner = runPremarketScanner({
@@ -1384,7 +1448,7 @@ export async function buildSnapshot(req) {
     relativeVolume: relativeVolumeLayer.data?.leaders || []
   });
   const signalEngine = buildSignalEngine({
-    indices: yahoo.data?.indices || snapshotIndices,
+    indices: yahoo.data?.indices || [],
     scanner: premarketScanner,
     breadth: marketBreadthLayer.data || marketBreadthData,
     risk: riskRegime,
@@ -1393,26 +1457,30 @@ export async function buildSnapshot(req) {
     relativeVolume: relativeVolumeLayer.data?.leaders || []
   });
 
-  const finviz = keepLastGood("finviz", source("finviz", sectorData, "proxy", generatedAt, "Sector Heat Proxy"));
+  const finviz = keepLastGood("finviz", source("finviz", sectorData, sectorData.length ? "delayed" : "unavailable", generatedAt, "Sector Heat Proxy", {
+    error: sectorData.length ? null : "source_data_unavailable"
+  }));
   const aggregateNewsStatus = selectedNewsSource ? selectedNewsSource.source.status || "delayed" : "unavailable";
   const aggregateNewsConfidence = selectedNewsSource?.source?.confidence || (aggregateNewsStatus === "live" ? "HIGH" : aggregateNewsStatus === "delayed" ? "MEDIUM" : "LOW");
-  const benzinga = keepLastGood("benzinga", source("benzinga", { movers: moverData.length ? moverData : deriveMovers(snapshotQuotes, []), news }, aggregateNewsStatus, generatedAt, "News Aggregator", {
+  const benzinga = keepLastGood("benzinga", source("benzinga", { movers: moverData, news }, aggregateNewsStatus, generatedAt, "News Aggregator", {
     error: selectedNewsSource ? null : "no_realtime_news",
     confidence: aggregateNewsConfidence,
     fallback: !selectedNewsSource
   }));
-  const unusualWhales = keepLastGood("unusualWhales", source("unusualWhales", optionProxyData, "proxy", generatedAt, "Options Flow Proxy"));
+  const unusualWhales = keepLastGood("unusualWhales", source("unusualWhales", optionProxyData, optionProxyData.length ? "delayed" : "unavailable", generatedAt, "Options Flow Proxy", {
+    error: optionProxyData.length ? null : "insufficient_realtime_quotes"
+  }));
   const xMacro = source("xMacro", [
     { source: "Macro Monitor", title: `${riskRegime.mode} 结构监控`, summary: riskRegime.mode === "Risk-On" ? "QQQ、VIX、DXY 与 TNX 组合支持科技风险偏好。" : "宏观变量仍需观察，避免无量追高。", tone: riskRegime.mode === "Risk-Off" ? "bearish" : "bullish" }
-  ], "proxy", generatedAt, "Macro Risk Proxy");
+  ], "delayed", generatedAt, "Macro Risk Proxy");
 
   const snapshot = {
     generatedAt,
     riskRegime,
     layers: {
       realtimeQuotes: {
-        sourcePriority: ["Finnhub", "TwelveData", "TradingView", "Yahoo", "Stooq", "Snapshot"],
-        confidence: finnhub.status === "live" || twelveData.status === "delayed" ? "中高" : "低",
+        sourcePriority: ["Finnhub", "TwelveData", "Fallback Cache"],
+        confidence: finnhubProbe.status === "LIVE" || twelveData.status === "delayed" ? "中高" : "低",
         freshness: nowIso(generatedAt)
       },
       marketStructure: marketBreadthLayer.data || marketBreadthData,
@@ -1434,7 +1502,7 @@ export async function buildSnapshot(req) {
       premarketScanner
     },
     sources: {
-        finnhub,
+        finnhub: finnhubProbe,
         twelveData,
         alphavantage: alphaMacro,
         fred: fredMacro,
@@ -1488,7 +1556,16 @@ export default async function handler(req, res) {
       servedFrom: "emergency-snapshot",
       error: error.message,
       sources: {
-        finnhub: fallbackSource("finnhub", []),
+        finnhub: {
+          status: "UNAVAILABLE",
+          source: "Finnhub",
+          error: "invalid_response",
+          testSymbols: ["AAPL", "NVDA", "SPY", "QQQ"],
+          quotes: [],
+          confidence: "LOW",
+          fallback: true,
+          participatesInScoring: false
+        },
         twelveData: fallbackSource("twelveData", []),
         alphavantage: fallbackSource("alphavantage", null),
         fred: fallbackSource("fred", []),
@@ -1496,13 +1573,13 @@ export default async function handler(req, res) {
         insider: fallbackSource("insider", { signals: [] }),
         relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
         marketBreadth: fallbackSource("marketBreadth", {}),
-        yahoo: fallbackSource("yahoo", { indices: snapshotIndices, quotes: snapshotQuotes }),
-        reddit: fallbackSource("reddit", { score: 58, tone: "中性", mentions: [["NVDA", 8], ["TSLA", 6]], summary: "SNAPSHOT：散户关注集中在 AI 与高 beta。" }),
+        yahoo: fallbackSource("yahoo", { indices: lastGoodIndices(), quotes: lastGoodQuotes() }),
+        reddit: fallbackSource("reddit", { score: null, tone: "UNAVAILABLE", mentions: [], summary: "数据源不可用。" }),
         tradingView: fallbackSource("tradingView", []),
         xMacro: fallbackSource("xMacro", []),
-        finviz: fallbackSource("finviz", deriveSectors(snapshotQuotes)),
-        unusualWhales: fallbackSource("unusualWhales", deriveOptionsProxy(snapshotQuotes, { sectors: deriveSectors(snapshotQuotes), reddit: {}, news: [] })),
-        benzinga: { ...fallbackSource("benzinga", { movers: deriveMovers(snapshotQuotes, []), news: [] }), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
+        finviz: fallbackSource("finviz", []),
+        unusualWhales: fallbackSource("unusualWhales", []),
+        benzinga: { ...fallbackSource("benzinga", { movers: [], news: [] }), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         finnhubNews: { ...fallbackSource("finnhubNews", []), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         marketWatchNews: { ...fallbackSource("marketWatchNews", []), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         reutersNews: { ...fallbackSource("reutersNews", []), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
