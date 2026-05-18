@@ -200,44 +200,6 @@ async function fetchJson(url) {
   }
 }
 
-async function withFallback(sourceKey, loader, fallbackValue) {
-  try {
-    const data = await loader();
-    const updatedAt = Date.now();
-    writeSourceCache(sourceKey, data, updatedAt, "live");
-    window.__dashboardErrors = window.__dashboardErrors || {};
-    delete window.__dashboardErrors[sourceKey];
-    return {
-      data,
-      status: "live",
-      label: sourceCatalog[sourceKey],
-      updatedAt,
-      timestamp: formatClock(updatedAt)
-    };
-  } catch (error) {
-    console.warn(`${sourceKey} fallback`, error);
-    window.__dashboardErrors = window.__dashboardErrors || {};
-    window.__dashboardErrors[sourceKey] = error.message || String(error);
-    const cached = readSourceCache(sourceKey);
-    if (cached) {
-      return {
-        data: cached.data,
-        status: "cached",
-        label: sourceCatalog[sourceKey],
-        updatedAt: cached.updatedAt,
-        timestamp: `最后成功 ${formatDateTime(cached.updatedAt)}`
-      };
-    }
-    return {
-      data: fallbackValue,
-      status: "snapshot",
-      label: sourceCatalog[sourceKey],
-      updatedAt: null,
-      timestamp: FALLBACK_SNAPSHOT_LABEL
-    };
-  }
-}
-
 function writeSourceCache(sourceKey, data, updatedAt, dataQuality = "live") {
   if (!["live", "delayed", "proxy"].includes(normalizeDataQuality(dataQuality))) return;
   try {
@@ -258,126 +220,6 @@ function readSourceCache(sourceKey) {
     console.warn("cache read skipped", sourceKey, error);
     return null;
   }
-}
-
-async function loadYahoo() {
-  const symbols = (CONFIG.yahooSymbols || []).map(encodeURIComponent).join(",");
-  const url = endpoint("yahoo")
-    ? `${endpoint("yahoo")}?symbols=${symbols}`
-    : `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}`;
-  const json = await fetchJson(url);
-  const rows = json.quoteResponse?.result || [];
-  const bySymbol = new Map(rows.map((row) => [row.symbol, row]));
-
-  const mapIndex = (id, symbol, fallbackMetric) => {
-    const row = bySymbol.get(symbol);
-    const value = Number(row?.regularMarketPrice || row?.regularMarketPriceRaw || 0);
-    const change = Number(row?.regularMarketChangePercent ?? fallbackMetric.change);
-
-    if (!Number.isFinite(value) || value <= 0) {
-      return {
-        ...fallbackMetric,
-        value: fallbackMetric.value,
-        change: fallbackMetric.change,
-        note: fallbackMetric.note?.startsWith("SNAPSHOT")
-          ? fallbackMetric.note
-          : "快照数据（SNAPSHOT）：实时源暂不可用，使用结构快照。"
-      };
-    }
-
-    return {
-      ...fallbackMetric,
-      value,
-      change,
-      note: "实时/延迟（LIVE / DELAYED）：多源行情。"
-    };
-  };
-
-  const indices = [
-    mapIndex("SPY", "SPY", fallback.yahoo.indices[0]),
-    mapIndex("QQQ", "QQQ", fallback.yahoo.indices[1]),
-    mapIndex("NDX", "^NDX", fallback.yahoo.indices[2]),
-    mapIndex("VIX", "^VIX", fallback.yahoo.indices[3]),
-    mapIndex("TNX", "^TNX", fallback.yahoo.indices[4]),
-    mapIndex("DXY", "DX-Y.NYB", fallback.yahoo.indices[5]),
-    mapIndex("GOLD", "GC=F", fallback.yahoo.indices[6])
-  ];
-
-  const quoteRows = Object.keys(symbolMeta).map((symbol) => {
-    const row = bySymbol.get(symbol);
-    const seed = fallback.yahoo.quotes.find((item) => item.symbol === symbol);
-    const volume = Number(row?.regularMarketVolume || 0);
-    const averageVolume = Number(row?.averageDailyVolume3Month || 0);
-    const hasRealVolume = volume > 0 && averageVolume > 0;
-    return {
-      ...quote(
-      symbol,
-      row?.preMarketPrice ?? row?.regularMarketPrice ?? seed?.price ?? 0,
-      row?.preMarketChangePercent ?? row?.regularMarketChangePercent ?? seed?.preMarketChange ?? 0,
-      hasRealVolume
-        ? volume / averageVolume
-        : seed?.volumeRatio ?? 1
-      ),
-      regularMarketChangePercent: row?.regularMarketChangePercent,
-      volume,
-      averageVolume,
-      dataQuality: row ? "live" : "snapshot",
-      dataStatus: row ? "LIVE" : "SNAPSHOT",
-      isTradable: Boolean(row),
-      realRelativeVolume: hasRealVolume ? volume / averageVolume : null,
-      proxyRelativeVolume: hasRealVolume ? null : seed?.volumeRatio ?? 1
-    };
-  });
-
-  return { indices, quotes: quoteRows };
-}
-
-async function loadReddit() {
-  const json = await fetchJson(endpoint("reddit") || "https://www.reddit.com/r/wallstreetbets/hot.json?limit=50");
-  const posts = json.data?.children?.map((item) => item.data) || [];
-  const tickers = {};
-  const positiveWords = ["call", "calls", "moon", "bull", "buy", "yolo", "beat"];
-  const negativeWords = ["put", "puts", "bear", "sell", "short", "miss"];
-  let toneScore = 50;
-
-  for (const post of posts) {
-    const text = `${post.title || ""}`.toUpperCase();
-    for (const symbol of Object.keys(symbolMeta)) {
-      if (text.includes(symbol)) tickers[symbol] = (tickers[symbol] || 0) + 1;
-    }
-    const lower = text.toLowerCase();
-    toneScore += positiveWords.some((word) => lower.includes(word)) ? 1.6 : 0;
-    toneScore -= negativeWords.some((word) => lower.includes(word)) ? 1.4 : 0;
-  }
-
-  const score = clamp(Math.round(toneScore));
-  const mentions = Object.entries(tickers).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  return {
-    score,
-    tone: score >= 62 ? "偏乐观" : score <= 42 ? "偏谨慎" : "中性",
-    mentions: mentions.length ? mentions : fallback.reddit.mentions,
-    summary: score >= 62 ? "WSB 风险偏好回升，AI 与高 beta 讨论更活跃。" : "WSB 情绪未形成一致追涨，短线更偏观望。"
-  };
-}
-
-async function loadConfiguredArray(key, fallbackValue) {
-  const json = await fetchJson(endpoint(key));
-  return Array.isArray(json) ? json : json.items || json.data || fallbackValue;
-}
-
-async function loadBenzinga() {
-  const json = await fetchJson(endpoint("benzinga"));
-  return {
-    movers: json.movers || fallback.benzinga.movers,
-    news: json.news || fallback.benzinga.news
-  };
-}
-
-async function loadProviderStatus(key) {
-  const url = key === "twelveData" ? endpoint("twelvedata") || endpoint("twelveData") : endpoint(key);
-  const json = await fetchJson(url);
-  if (json.status === "unavailable") throw new Error(json.error?.message || `${key} unavailable`);
-  return json.data || [];
 }
 
 async function loadServerSnapshot() {
@@ -412,43 +254,9 @@ function hasSnapshotData(data) {
   return true;
 }
 
-async function loadAllSources() {
-  const [finnhub, twelveData, alphavantage, fred, yahoo, tradingView, xMacro, reddit, finviz, unusualWhales, benzinga] = await Promise.all([
-    withFallback("finnhub", () => loadProviderStatus("finnhub"), []),
-    withFallback("twelveData", () => loadProviderStatus("twelveData"), []),
-    withFallback("alphavantage", () => loadProviderStatus("alphavantage"), null),
-    withFallback("fred", () => loadProviderStatus("fred"), []),
-    withFallback("yahoo", loadYahoo, fallback.yahoo),
-    withFallback("tradingView", () => loadConfiguredArray("tradingViewScreener", fallback.tradingView), fallback.tradingView),
-    withFallback("xMacro", () => loadConfiguredArray("xMacro", fallback.xMacro), fallback.xMacro),
-    withFallback("reddit", loadReddit, fallback.reddit),
-    withFallback("finviz", () => loadConfiguredArray("finvizHeatmap", fallback.finviz), fallback.finviz),
-    withFallback("unusualWhales", () => loadConfiguredArray("unusualWhales", fallback.unusualWhales), fallback.unusualWhales),
-    withFallback("benzinga", loadBenzinga, fallback.benzinga)
-  ]);
-
-  return {
-    finnhub,
-    twelveData,
-    alphavantage,
-    fred,
-    yahoo,
-    tradingView,
-    xMacro,
-    reddit,
-    finviz,
-    unusualWhales,
-    benzinga,
-    sentiment: fallback.sentiment
-  };
-}
-
 async function refreshSequentially() {
   const sources = (await loadServerSnapshot().catch((error) => {
     console.warn("server snapshot fallback", error);
-    return null;
-  })) || (await loadAllSources().catch((error) => {
-    console.warn("direct source fallback", error);
     return null;
   })) || loadCachedSources() || fallbackSources();
   render(buildDashboard(sources));

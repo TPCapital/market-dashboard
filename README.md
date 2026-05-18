@@ -55,11 +55,15 @@ npm run dev
 http://127.0.0.1:4173
 ```
 
-不要使用 `python3 -m http.server` 作为正式本地测试方式；它只能提供静态文件，不能运行 `/api/*` 数据代理。
+不要使用 `python3 -m http.server` 作为正式本地测试方式；它只能提供静态文件，不能运行 `/api/snapshot` 数据代理。
 
 ## 公网部署
 
-可直接部署到 Vercel。项目使用根目录静态文件 + `/api/*` Serverless Functions，不需要 `public` 目录。
+可直接部署到 Vercel。当前 Vercel Hobby 兼容架构为：
+
+- `/api/snapshot` 是唯一公开 Serverless Function
+- `lib/` 为内部数据源聚合模块
+- 前端只请求 `/api/snapshot`
 
 - `index.html`
 - `styles.css`
@@ -67,7 +71,8 @@ http://127.0.0.1:4173
 - `app.js`
 - `vercel.json`
 - `package.json`
-- `api/`
+- `api/`（仅 `snapshot.js`）
+- `lib/`
 - `scripts/`
 
 Vercel 设置建议：
@@ -99,14 +104,7 @@ Vercel 设置建议：
 window.DASHBOARD_CONFIG = {
   refreshSeconds: 60,
   endpoints: {
-    snapshot: "/api/snapshot",
-    finnhub: "/api/finnhub",
-    twelvedata: "/api/twelvedata",
-    alphavantage: "/api/alphavantage",
-    fred: "/api/fred",
-    reddit: "/api/reddit",
-    finvizHeatmap: "/api/finviz-heatmap",
-    tradingViewScreener: "/api/tradingview-screener"
+    snapshot: "/api/snapshot"
   }
 };
 ```
@@ -129,4 +127,4 @@ window.DASHBOARD_CONFIG = {
 ```
 
 `benzinga.data.movers` 若为空，前端会自动从 `yahoo.data.quotes` 派生，不让盘前异动榜空白。  
-`Yahoo/Benzinga/UnusualWhales/X Macro` 当前为 `/api/snapshot` 内部聚合代理，不再单独暴露 `/api/*` 端点（兼容 Vercel Hobby 8 个函数上限）。
+`Yahoo/Benzinga/UnusualWhales/X Macro` 当前为 `/api/snapshot` 内部聚合代理，不再单独暴露 API 端点。
