@@ -16,6 +16,8 @@ const sourceCatalog = {
   relativeVolume: "Relative Volume Scanner",
   premarketMomentum: "Premarket Momentum Engine",
   marketBreadth: "Market Breadth Engine",
+  decisionEngine: "Decision Engine",
+  newsAggregator: "News Aggregator",
   marketData: "Multi-source Market Data / Finnhub primary",
   tradingView: "TradingView Screener",
   xMacro: "Walter Bloomberg X / Kobeissi X",
@@ -214,6 +216,26 @@ async function loadServerSnapshot() {
   const joiner = url.includes("?") ? "&" : "?";
   const json = await fetchJson(`${url}${joiner}ts=${Date.now()}`);
   const sources = fallbackSources();
+  if (json.strategySummary || json.marketRegime || json.tradePlan || json.watchlist || json.confidenceScore) {
+    sources.decisionEngine = {
+      data: {
+        strategySummary: json.strategySummary,
+        marketRegime: json.marketRegime,
+        tradePlan: json.tradePlan,
+        watchlist: json.watchlist,
+        confidenceScore: json.confidenceScore
+      },
+      status: json.sources?.decisionEngine?.status || json.sources?.marketData?.status || "delayed",
+      label: sourceCatalog.decisionEngine,
+      source: sourceCatalog.decisionEngine,
+      updatedAt: Number(json.generatedAt || Date.now()),
+      timestamp: formatClock(Number(json.generatedAt || Date.now())),
+      latency: null,
+      confidence: json.confidenceScore?.tradeConfidence || "MEDIUM",
+      freshness: "current snapshot",
+      fallback: false
+    };
+  }
   for (const [key, value] of Object.entries(json.sources || {})) {
     if (!sources[key] || !["live", "delayed", "proxy", "cached", "fallback", "snapshot", "unavailable"].includes(value?.status) || !hasSnapshotData(value.data)) continue;
     const status = json.servedFrom === "last-success" || value.status === "cached" ? "cached" : value.status;
@@ -290,6 +312,7 @@ function fallbackSources() {
     relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
     premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
     marketBreadth: fallbackSource("marketBreadth", {}),
+    decisionEngine: fallbackSource("decisionEngine", {}),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
     finnhubInsider: fallbackSource("finnhubInsider", []),
     finnhubEarnings: fallbackSource("finnhubEarnings", []),
@@ -297,6 +320,7 @@ function fallbackSources() {
     reddit: fallbackSource("reddit", fallback.reddit),
     finviz: fallbackSource("finviz", fallback.finviz),
     unusualWhales: fallbackSource("unusualWhales", fallback.unusualWhales),
+    newsAggregator: fallbackSource("newsAggregator", fallback.benzinga),
     benzinga: fallbackSource("benzinga", fallback.benzinga),
     sentiment: fallback.sentiment
   };
@@ -441,6 +465,43 @@ function hasScoringData(items = []) {
   return items.some((item) => isUsableForInference(item));
 }
 
+function riskModeFromDecision(type = "") {
+  if (["RISK_ON", "TREND_DAY", "SQUEEZE"].includes(type)) return "Risk-On";
+  if (["RISK_OFF", "GAP_FADE"].includes(type)) return "Risk-Off";
+  if (type === "CHOP") return "Chop";
+  return "Neutral";
+}
+
+function riskFromDecisionEngine(marketRegime = {}, strategySummary = {}, indices = [], confidenceScore = {}) {
+  const byId = Object.fromEntries((indices || []).map((item) => [item.id, item]));
+  const score = Number.isFinite(Number(marketRegime.score)) ? Number(marketRegime.score) : 50;
+  return {
+    score,
+    mode: riskModeFromDecision(marketRegime.type),
+    confidence: confidenceScore.tradeConfidence === "HIGH" ? "高" : confidenceScore.tradeConfidence === "MEDIUM" ? "中" : "低",
+    dataQuality: "live",
+    tradable: true,
+    reason: marketRegime.explanation || "LIVE marketData 已接入，基于指数、宽度与动能生成风险判断。",
+    conclusion: strategySummary.summary || marketRegime.explanation || "市场进入可交易评估状态。",
+    inputs: [
+      ["SPY", signed(byId.SPY?.change || 0)],
+      ["QQQ", signed(byId.QQQ?.change || 0)],
+      ["VIX", signed(byId.VIX?.change || 0)],
+      ["宽度", marketRegime.breadthStrength ?? "--"]
+    ]
+  };
+}
+
+function tradePlanFromDecision(plan = {}, watchlist = {}) {
+  const focus = [...(watchlist.strong || []), ...(watchlist.watch || [])].slice(0, 3).map((item) => `${item.symbol}：${item.setup || "观察开盘确认"}`);
+  return {
+    title: plan.action || "可进攻但控仓",
+    body: `${plan.entryCondition || "只做开盘后放量突破 VWAP 的强势股"} ${plan.invalidation || ""}`.trim(),
+    focus: focus.length ? focus : [plan.entryCondition || "等待强势股开盘确认"],
+    avoid: [plan.avoidCondition || "避免无量高开与低 RVOL breakout", plan.riskControl || "单笔风险控制在账户 1%-2%"]
+  };
+}
+
 function buildDashboard(sources) {
   sources = enrichSources(sources);
   const reliability = computeDataReliability(sources);
@@ -476,8 +537,9 @@ function buildDashboard(sources) {
   const optionsForScoring = scoreEligible.options ? options : [];
   const retailForScoring = scoreEligible.retail ? retail : {};
   const marketBreadth = sources.marketBreadth?.data || {};
+  const decision = sources.decisionEngine?.data || {};
   const strategyFlows = flowsForScoring.length ? flowsForScoring : deriveStrategyFlows(premarketMomentum, stars, marketBreadth);
-  const risk = indicesForScoring.length
+  const calculatedRisk = indicesForScoring.length
     ? calculateRiskRegime(indicesForScoring, sources.sentiment, retailForScoring, {
         breadth: marketBreadth,
         momentum: premarketMomentum,
@@ -493,6 +555,9 @@ function buildDashboard(sources) {
         conclusion: "等待可交易数据恢复后再评估方向。",
         inputs: [["SPY", "不可用"], ["QQQ", "不可用"], ["VIX", "不可用"], ["可信度", "低"]]
       };
+  const risk = decision.marketRegime && sources.marketData.status === "live"
+    ? riskFromDecisionEngine(decision.marketRegime, decision.strategySummary, indicesForScoring, decision.confidenceScore)
+    : calculatedRisk;
   const opportunities = calculatePremarketOpportunities(quotesForScoring, {
     flows: strategyFlows,
     news: newsForScoring,
@@ -501,13 +566,18 @@ function buildDashboard(sources) {
     indices: indicesForScoring,
     options: optionsForScoring
   });
-  const tradePlan = buildPremarketTradePlan(opportunities, strategyFlows, risk, optionsForScoring, premarketMomentum);
-  const [strategy, strategyContext] = strategyFrom(risk, strategyFlows, retailForScoring, optionsForScoring, {
+  const generatedTradePlan = buildPremarketTradePlan(opportunities, strategyFlows, risk, optionsForScoring, premarketMomentum);
+  const tradePlan = decision.tradePlan && sources.marketData.status === "live"
+    ? tradePlanFromDecision(decision.tradePlan, decision.watchlist)
+    : generatedTradePlan;
+  const [strategy, strategyContext] = decision.strategySummary && sources.marketData.status === "live"
+    ? [decision.strategySummary.headline, `${decision.strategySummary.summary} 置信度 ${decision.strategySummary.confidence || "MEDIUM"}。`]
+    : strategyFrom(risk, strategyFlows, retailForScoring, optionsForScoring, {
     momentum: premarketMomentum,
     breadth: marketBreadth,
     tradingView: stars
   });
-  const strategyBasis = statusGroup([sources.marketData, sources.premarketMomentum, sources.marketBreadth, sources.tradingView]);
+  const strategyBasis = statusGroup([sources.decisionEngine, sources.marketData, sources.premarketMomentum, sources.marketBreadth, sources.tradingView]);
   const sourceBasis = statusGroup(Object.values(sources).filter((source) => source?.status));
 
   return {
@@ -538,7 +608,7 @@ function buildDashboard(sources) {
       star: statusGroup([sources.tradingView]),
       opportunity: statusGroup([sources.marketData, sources.finviz, sources.reddit, sources.benzinga]),
       momentum: statusGroup([sources.premarketMomentum, sources.marketData, sources.relativeVolume]),
-      tradePlan: statusGroup([sources.marketData, sources.finviz, sources.unusualWhales]),
+      tradePlan: statusGroup([sources.decisionEngine, sources.marketData, sources.finviz, sources.unusualWhales]),
       news: statusGroup([sources.benzinga]),
       macro: statusGroup([sources.xMacro]),
       retail: statusGroup([sources.reddit]),
@@ -1444,6 +1514,7 @@ function displayRiskMode(mode) {
   if (mode === "Risk-On") return "风险偏好开启（Risk-On）";
   if (mode === "Risk-Off") return "风险规避（Risk-Off）";
   if (mode === "Neutral") return "中性（Neutral）";
+  if (mode === "Chop") return "震荡（Chop）";
   return mode || "--";
 }
 
@@ -1452,6 +1523,7 @@ function displayRiskModeHero(mode) {
   if (mode === "Risk-On") return "风险偏好";
   if (mode === "Risk-Off") return "风险规避";
   if (mode === "Neutral") return "中性";
+  if (mode === "Chop") return "震荡";
   return mode || "--";
 }
 

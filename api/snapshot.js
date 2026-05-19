@@ -5,6 +5,11 @@ import { buildSignalEngine } from "../lib/signal-engine.js";
 import { buildEarningsLayer } from "../lib/earnings.js";
 import { buildInsiderLayer } from "../lib/insider.js";
 import { buildRelativeVolumeLayer } from "../lib/relative-volume.js";
+import { buildConfidenceScore } from "../lib/confidence-score.js";
+import { buildMarketRegime } from "../lib/market-regime.js";
+import { buildStrategySummary } from "../lib/strategy-engine.js";
+import { buildTradePlan } from "../lib/trade-plan.js";
+import { buildWatchlist } from "../lib/watchlist-engine.js";
 
 const MARKET_SYMBOLS = {
   SPY: "SPY",
@@ -26,6 +31,8 @@ const sourceCatalog = {
   relativeVolume: "Relative Volume Scanner",
   premarketMomentum: "Premarket Momentum Engine",
   marketBreadth: "Market Breadth Engine",
+  decisionEngine: "Decision Engine",
+  newsAggregator: "News Aggregator",
   marketData: "Multi-source Market Data",
   tradingView: "TradingView Screener",
   xMacro: "Macro Feed",
@@ -1574,11 +1581,61 @@ export async function buildSnapshot(req) {
     indices: marketData.indices || marketData.data?.indices || [],
     quotes: marketData.quotes || marketData.data?.quotes || []
   };
+  const newsAggregator = source("newsAggregator", { movers: moverData, news }, aggregateNewsStatus, generatedAt, "News Aggregator", {
+    error: selectedNewsSource ? null : "no_realtime_news",
+    confidence: aggregateNewsConfidence,
+    fallback: !selectedNewsSource
+  });
+  const confidenceScore = buildConfidenceScore({
+    marketData: normalizedMarketDataSource,
+    premarketMomentum: premarketMomentumLayer,
+    marketBreadth: marketBreadthLayer,
+    tradingView,
+    relativeVolume: relativeVolumeLayer,
+    newsAggregator
+  });
+  const marketRegime = buildMarketRegime({
+    marketData: normalizedMarketDataSource,
+    premarketMomentum: premarketMomentumLayer,
+    marketBreadth: marketBreadthLayer,
+    tradingView
+  });
+  const watchlist = buildWatchlist({
+    premarketMomentum: premarketMomentumLayer,
+    marketRegime,
+    relativeVolume: relativeVolumeLayer
+  });
+  const strategySummary = buildStrategySummary({
+    marketRegime,
+    premarketMomentum: premarketMomentumLayer,
+    marketBreadth: marketBreadthLayer,
+    confidenceScore
+  });
+  const tradePlan = buildTradePlan({
+    marketRegime,
+    strategySummary,
+    watchlist
+  });
+  const decisionEngine = source("decisionEngine", {
+    strategySummary,
+    marketRegime,
+    tradePlan,
+    watchlist,
+    confidenceScore
+  }, normalizedMarketDataSource.status === "live" ? "live" : normalizedMarketDataSource.status === "delayed" ? "delayed" : "unavailable", generatedAt, "Decision Engine", {
+    confidence: confidenceScore.tradeConfidence,
+    fallback: false
+  });
 
   const snapshot = {
     generatedAt,
     envDebug: envDebug(),
     riskRegime,
+    strategySummary,
+    marketRegime,
+    tradePlan,
+    watchlist,
+    confidenceScore,
     layers: {
       realtimeQuotes: {
         sourcePriority: ["Finnhub", "TwelveData", "Fallback Cache"],
@@ -1601,6 +1658,11 @@ export async function buildSnapshot(req) {
         status: selectedNewsSource ? (selectedNewsSource.source.status || "delayed") : "no_realtime_news",
         error: selectedNewsSource ? null : "no_realtime_news"
       },
+      strategySummary,
+      marketRegime,
+      tradePlan,
+      watchlist,
+      confidenceScore,
       tradeSignals: signalEngine,
       premarketScanner
     },
@@ -1614,6 +1676,7 @@ export async function buildSnapshot(req) {
         relativeVolume: relativeVolumeLayer,
         premarketMomentum: premarketMomentumLayer,
         marketBreadth: marketBreadthLayer,
+        decisionEngine,
         marketData: normalizedMarketDataSource,
         reddit,
         tradingView,
@@ -1626,7 +1689,8 @@ export async function buildSnapshot(req) {
         xMacro,
         finviz,
         unusualWhales,
-        benzinga
+        benzinga,
+        newsAggregator
     }
   };
   lastGoodSnapshot = snapshot;
@@ -1679,12 +1743,14 @@ export default async function handler(req, res) {
         relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
         premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
         marketBreadth: fallbackSource("marketBreadth", {}),
+        decisionEngine: fallbackSource("decisionEngine", {}),
         marketData: fallbackSource("marketData", { indices: lastGoodIndices(), quotes: lastGoodQuotes() }),
         reddit: fallbackSource("reddit", { score: null, tone: "UNAVAILABLE", mentions: [], summary: "数据源不可用。" }),
         tradingView: fallbackSource("tradingView", []),
         xMacro: fallbackSource("xMacro", []),
         finviz: fallbackSource("finviz", []),
         unusualWhales: fallbackSource("unusualWhales", []),
+        newsAggregator: { ...fallbackSource("newsAggregator", { movers: [], news: [] }), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         benzinga: { ...fallbackSource("benzinga", { movers: [], news: [] }), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         finnhubNews: { ...fallbackSource("finnhubNews", []), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
         marketWatchNews: { ...fallbackSource("marketWatchNews", []), status: "unavailable", dataQuality: "unavailable", error: "no_realtime_news" },
