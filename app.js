@@ -3,7 +3,7 @@ const REFRESH_SECONDS = CONFIG.refreshSeconds || 300;
 const CACHE_PREFIX = "ai-us-equity-dashboard:";
 const FALLBACK_SNAPSHOT_LABEL = "快照数据（SNAPSHOT）";
 const CACHE_TRADABLE_MS = 15 * 60 * 1000;
-const STATUS_WEIGHT = { live: 1, delayed: 0.75, proxy: 0.35, cached: 0.25, snapshot: 0.1, unavailable: 0 };
+const STATUS_WEIGHT = { live: 1, delayed: 0.75, proxy: 0.35, cached: 0.25, snapshot: 0, unavailable: 0 };
 const SOURCE_WEIGHT = { finnhub: 0.24, twelveData: 0.22, relativeVolume: 0.2, earnings: 0.17, marketBreadth: 0.17 };
 
 const sourceCatalog = {
@@ -25,7 +25,7 @@ const sourceCatalog = {
   finnhubEarnings: "Finnhub Earnings",
   reddit: "WallStreetBets Reddit",
   finviz: "Finviz Heatmap",
-  unusualWhales: "Options Flow Proxy",
+  unusualWhales: "Options Signal System",
   benzinga: "Benzinga"
 };
 
@@ -102,12 +102,7 @@ const fallback = {
     sector("加密资产", 67, 0.62, "COIN / MSTR 跟随高 beta 风险偏好改善。"),
     sector("能源", 41, -0.22, "油价催化不足，资金相对流出。")
   ],
-  unusualWhales: [
-    optionFlow("NVDA", "AI 半导体", 88, "CALL MOMENTUM PROXY", "AI 半导体板块强势，价格动量和成交活跃度共振，短线看涨期权需求可能升温。", "风险：追高风险中等，等待回踩更优。"),
-    optionFlow("PLTR", "AI 软件", 81, "CALL MOMENTUM PROXY", "AI 软件主线延续，散户关注度和价格动量同步增强。", "风险：若开盘冲高回落，避免追单。"),
-    optionFlow("TSLA", "高 beta 科技", 66, "WATCHLIST ONLY", "散户关注度高，但价格确认不足，适合观察不适合重仓追高。", "风险：需等待开盘量价确认。"),
-    optionFlow("UNH", "医疗", 72, "PUT / HEDGE PROXY", "防御板块承压，价格走弱，短线对冲需求可能上升。", "风险：若开盘快速修复，空头对冲可能失效。")
-  ],
+  unusualWhales: [],
   benzinga: {
     movers: [
       mover("CSCO", 15.03, "AI 网络订单与业绩指引强于预期。", "利好"),
@@ -151,10 +146,6 @@ function feed(source, title, summary, tone = "neutral") {
 
 function sector(name, score, change, summary) {
   return { sector: name, score, change, summary };
-}
-
-function optionFlow(symbol, sectorName, score, direction, summary, risk) {
-  return { symbol, sector: sectorName, score, direction, type: direction, summary, risk };
 }
 
 function mover(symbol, change, reason, bias) {
@@ -507,12 +498,12 @@ function buildDashboard(sources) {
   const reliability = computeDataReliability(sources);
   const scoreEligible = {
     quotes: isCoreScoreSource(sources.marketData),
-    sectors: isCoreScoreSource(sources.finviz),
-    news: isCoreScoreSource(sources.benzinga),
-    retail: isCoreScoreSource(sources.reddit),
-    options: isCoreScoreSource(sources.unusualWhales),
-    earnings: isCoreScoreSource(sources.earnings),
-    insider: isCoreScoreSource(sources.insider),
+    sectors: isCoreScoreSource(sources.marketBreadth) || isCoreScoreSource(sources.premarketMomentum) || isCoreScoreSource(sources.tradingView),
+    news: isCoreScoreSource(sources.newsAggregator),
+    retail: false,
+    options: false,
+    earnings: false,
+    insider: false,
     relativeVolume: isCoreScoreSource(sources.relativeVolume),
     breadth: isCoreScoreSource(sources.marketBreadth)
   };
@@ -523,18 +514,18 @@ function buildDashboard(sources) {
   const indicesForScoring = scoreEligible.quotes ? marketIndices : [];
   const quoteMap = new Map(marketQuotes.map((item) => [item.symbol, item]));
   const flows = normalizeSectors(sources.finviz.data, sources.finviz);
-  const flowsForScoring = scoreEligible.sectors ? flows : [];
+  const flowsForScoring = [];
   const moversRaw = Array.isArray(benzingaData.movers) && benzingaData.movers.length
     ? benzingaData.movers
     : deriveMoversFromQuotes(marketQuotes);
   const movers = normalizeMovers(moversRaw, quoteMap, marketQuotes);
   const stars = normalizeStars(sources.tradingView.data, quoteMap);
   const retail = sources.reddit.data;
-  const newsItems = Array.isArray(sources.benzinga?.data?.news) ? sources.benzinga.data.news : [];
+  const newsItems = Array.isArray(sources.newsAggregator?.data?.news) ? sources.newsAggregator.data.news : Array.isArray(sources.benzinga?.data?.news) ? sources.benzinga.data.news : [];
   const newsForScoring = scoreEligible.news ? newsItems : [];
   const options = normalizeOptions(sources.unusualWhales.data, sources.unusualWhales);
   const premarketMomentum = normalizePremarketMomentum(sources.premarketMomentum?.data?.leaders || [], sources.premarketMomentum);
-  const optionsForScoring = scoreEligible.options ? options : [];
+  const optionsForScoring = [];
   const retailForScoring = scoreEligible.retail ? retail : {};
   const marketBreadth = sources.marketBreadth?.data || {};
   const decision = sources.decisionEngine?.data || {};
@@ -768,15 +759,30 @@ function normalizeSectors(items = [], source = {}) {
     .slice(0, 6);
 }
 
-function normalizeOptions(items = [], source = {}) {
+function normalizeOptions(payload = [], source = {}) {
+  const items = Array.isArray(payload)
+    ? payload
+    : [
+        ...(payload?.callCandidates || []),
+        ...(payload?.putCandidates || []),
+        ...(payload?.watchOnly || []),
+        ...(payload?.avoidChasing || [])
+      ].length
+        ? [
+            ...(payload?.callCandidates || []),
+            ...(payload?.putCandidates || []),
+            ...(payload?.watchOnly || []),
+            ...(payload?.avoidChasing || [])
+          ]
+        : (payload?.cards || []);
   if (!items?.length) {
     return [{
       symbol: "--",
-      sector: "AI 期权流代理",
+      sector: "期权信号系统",
       score: null,
       conviction: "DATA INSUFFICIENT",
       direction: "DATA INSUFFICIENT",
-      summary: "行情与代理源均为空，暂不生成期权方向信号。",
+      summary: "核心实时数据不足，暂不生成 CALL / PUT 方向信号。",
       risk: "等待下一次数据刷新。",
       dataQuality: source.dataQuality || "snapshot",
       isTradable: false
@@ -784,21 +790,25 @@ function normalizeOptions(items = [], source = {}) {
   }
   return (items || []).map((item) => {
     const rawState = item.conviction || item.direction || item.type || "WATCHLIST";
-    const downgraded = rawState === "HIGH CONVICTION"
+    const downgraded = rawState === "CALL CANDIDATE"
+      ? "CALL CANDIDATE"
+      : rawState === "PUT CANDIDATE"
+        ? "PUT CANDIDATE"
+        : rawState === "AVOID CHASING"
+          ? "AVOID CHASING"
+          : rawState === "WATCH ONLY"
+            ? "WATCH ONLY"
+            : rawState === "HIGH CONVICTION"
       ? "MOMENTUM"
-      : rawState === "CALL MOMENTUM PROXY"
-        ? "MOMENTUM"
-        : rawState === "PUT / HEDGE PROXY"
-          ? "PUT / HEDGE WATCH"
-          : rawState;
+      : rawState;
     return {
       ...item,
       conviction: downgraded,
       direction: downgraded,
       dataQuality: source.dataQuality || "proxy",
       isTradable: Boolean(source.isTradable),
-      summary: `${item.summary || "基于免费数据生成代理方向。"}（代理推断，不是真实期权大单）`,
-      risk: item.risk || "风险：代理信号只作辅助，需等待开盘量价确认。"
+      summary: `${item.summary || "基于免费数据生成方向信号。"}（免费代理，不是真实 sweep）`,
+      risk: item.risk || "风险：期权信号只作辅助，需等待开盘量价确认。"
     };
   }).slice(0, 6);
 }
@@ -1541,8 +1551,10 @@ function displayTradeState(value = "") {
     "OPENING BREAKOUT WATCH": "开盘突破观察（Opening Breakout Watch）",
     "HIGH MOMENTUM WATCH": "高动量观察（High Momentum Watch）",
     "PUT / HEDGE WATCH": "对冲观察（Put / Hedge Watch）",
-    "PUT / HEDGE PROXY": "对冲代理（Put / Hedge Proxy）",
-    "CALL MOMENTUM PROXY": "看涨动量代理（Call Momentum Proxy）",
+    "CALL CANDIDATE": "CALL 候选",
+    "PUT CANDIDATE": "PUT 候选",
+    "WATCH ONLY": "仅观察（Watch Only）",
+    "AVOID CHASING": "避免追高",
     "LOW QUALITY": "低质量机会（Low Quality）",
     "LOW QUALITY / IGNORE": "低质量机会（Low Quality）",
     "DATA INSUFFICIENT": "数据不足",
@@ -1640,7 +1652,7 @@ function sourceRole(key) {
     xMacro: "宏观快讯，不参与个股新闻。",
     reddit: "散户情绪，只读取 WSB。",
     finviz: "热钱板块：Finviz 适配器。",
-    unusualWhales: "期权流代理信号：免费数据推断方向。",
+    unusualWhales: "期权信号系统：CALL / PUT / WATCH / AVOID 免费代理方向。",
     benzinga: "异动新闻：Benzinga 适配器。"
   }[key];
 }

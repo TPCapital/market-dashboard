@@ -38,7 +38,7 @@ const sourceCatalog = {
   xMacro: "Macro Feed",
   reddit: "WallStreetBets Reddit",
   finviz: "Sector Heat Proxy",
-  unusualWhales: "Options Flow Proxy",
+  unusualWhales: "Options Signal System",
   benzinga: "Benzinga API",
   finnhubNews: "Finnhub News",
   marketWatchNews: "MarketWatch RSS",
@@ -1278,11 +1278,36 @@ function deriveMovers(quotes, news = []) {
   });
 }
 
-function deriveOptionsProxy(quotes, context = {}) {
-  return [...(quotes || [])]
-    .map((stock) => calculateOptionsProxyScore(stock, context))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+function deriveOptionsSignalSystem(quotes, context = {}) {
+  if (!["live", "delayed"].includes(String(context.marketStatus || "").toLowerCase())) {
+    return {
+      status: "unavailable",
+      source: "Options Signal System",
+      error: "market_data_not_live_or_delayed",
+      callCandidates: [],
+      putCandidates: [],
+      watchOnly: [],
+      avoidChasing: [],
+      cards: []
+    };
+  }
+  const signals = [...(quotes || [])]
+    .filter((stock) => stock?.symbol && Number.isFinite(Number(stock.price)) && Number(stock.price) > 0)
+    .map((stock) => calculateOptionsSignalScore(stock, context))
+    .sort((a, b) => b.score - a.score);
+  const callCandidates = signals.filter((item) => item.bucket === "CALL").slice(0, 4);
+  const putCandidates = signals.filter((item) => item.bucket === "PUT").slice(0, 3);
+  const watchOnly = signals.filter((item) => item.bucket === "WATCH").slice(0, 4);
+  const avoidChasing = signals.filter((item) => item.bucket === "AVOID").slice(0, 4);
+  return {
+    status: signals.length ? "delayed" : "unavailable",
+    source: "Options Signal System",
+    callCandidates,
+    putCandidates,
+    watchOnly,
+    avoidChasing,
+    cards: [...callCandidates, ...putCandidates, ...watchOnly, ...avoidChasing].slice(0, 8)
+  };
 }
 
 function buildPremarketMomentumEngine({ quotes = [], tradingView = [], relativeVolume = [], news = [], marketStatus = "unavailable" } = {}) {
@@ -1371,65 +1396,68 @@ function classifyPremarketTheme(stock, catalystNews) {
   return "Momentum";
 }
 
-function calculateOptionsProxyScore(stock, context = {}) {
+function calculateOptionsSignalScore(stock, context = {}) {
   const sectorMap = new Map((context.sectors || []).map((item) => [item.sector, item]));
-  const mentionMap = new Map(context.reddit?.mentions || []);
   const rvolMap = new Map((context.relativeVolume || []).map((item) => [item.symbol, item]));
-  const earningsSet = new Set((context.earnings || []).map((item) => item.symbol).filter(Boolean));
-  const insiderMap = new Map((context.insider || []).map((item) => [item.symbol, item]));
+  const momentumMap = new Map((context.momentum || []).map((item) => [item.symbol || item.ticker, item]));
+  const tvMap = new Map((context.tradingView || []).map((item) => [item.symbol, item]));
+  const indexMap = Object.fromEntries((context.indices || []).map((item) => [item.id, item]));
   const news = context.news || [];
   const sector = stock.sector || "其他";
   const sectorHeat = sectorMap.get(sector)?.score ?? (55 + sectorThemeBonus(sector));
   const preChange = Number(stock.preMarketChangePercent ?? stock.preMarketChange ?? 0);
   const relativeVolume = Number(rvolMap.get(stock.symbol)?.relativeVolume || stock.relativeVolume || stock.volumeRatio || 1);
-  const mentions = Number(mentionMap.get(stock.symbol) || 0);
+  const momentumScore = Number(momentumMap.get(stock.symbol)?.momentumScore || 0);
+  const tvScore = Number(tvMap.get(stock.symbol)?.score || 50);
   const newsBias = news.find((item) => item.ticker === stock.symbol)?.bias || "NEUTRAL";
-  const earningsBoost = earningsSet.has(stock.symbol) ? 5 : 0;
-  const insiderSentiment = insiderMap.get(stock.symbol)?.sentiment || "NEUTRAL";
-  const insiderBoost = insiderSentiment === "BULLISH" ? 4 : insiderSentiment === "BEARISH" ? -4 : 0;
-  const aiBonus = /AI|半导体|软件|加密|高 beta/.test(sector) ? 10 : 0;
-  const score = clamp(Math.round(
-    Math.min(Math.abs(preChange), 6) * 7 +
-    Math.min(relativeVolume, 3) * 12 +
-    sectorHeat * 0.22 +
-    (newsBias === "BULLISH" ? 14 : newsBias === "BEARISH" ? 8 : 6) +
-    Math.min(mentions, 15) * 1.5 +
-    earningsBoost +
-    insiderBoost +
-    aiBonus
-  ));
-  const conviction = classifyFlowConviction(score, preChange, newsBias, relativeVolume);
+  const qqq = Number(indexMap.QQQ?.change || indexMap.NDX?.change || 0);
+  const spy = Number(indexMap.SPY?.change || 0);
+  const vix = Number(indexMap.VIX?.change || 0);
+  const riskAssetStrength = qqq * 5 + spy * 2 - Math.max(0, vix) * 2;
+  const volRiskPenalty = vix > 1 ? 8 : vix > 0 ? 4 : 0;
+  const directionBias = preChange >= 0 ? 1 : -1;
+  const baseScore = Math.min(Math.abs(preChange), 6) * 8 + Math.min(relativeVolume, 3) * 11 + sectorHeat * 0.18 + momentumScore * 0.16 + tvScore * 0.1;
+  const catalystScore = newsBias === "BULLISH" ? 12 : newsBias === "BEARISH" ? -8 : 4;
+  const callScore = clamp(Math.round(baseScore + catalystScore + riskAssetStrength - volRiskPenalty));
+  const putScore = clamp(Math.round(baseScore + (newsBias === "BEARISH" ? 14 : 0) - riskAssetStrength + (preChange < 0 ? 12 : 0) + Math.max(0, vix) * 2));
+  const bucket = classifyOptionsBucket({ callScore, putScore, preChange, relativeVolume, newsBias, qqq, vix });
+  const score = bucket === "PUT" ? putScore : callScore;
+  const direction = bucket === "CALL" ? "CALL CANDIDATE" : bucket === "PUT" ? "PUT CANDIDATE" : bucket === "AVOID" ? "AVOID CHASING" : "WATCH ONLY";
   return {
     symbol: stock.symbol,
     name: stock.name,
     sector,
     score,
-    conviction,
-    direction: conviction,
-    type: conviction,
-    summary: flowProxySummary(stock, conviction),
-    risk: conviction === "HIGH CONVICTION"
-      ? "风险：需观察开盘后量能延续。"
-      : conviction === "RISKY"
-        ? "风险：波动扩大，避免无确认追单。"
-        : "风险：等待价格与成交量确认。"
+    bucket,
+    conviction: direction,
+    direction,
+    type: direction,
+    relativeVolume,
+    summary: optionsSignalSummary(stock, bucket, { preChange, relativeVolume, qqq, spy, vix, newsBias }),
+    risk: optionsSignalRisk(bucket, { preChange, relativeVolume, vix })
   };
 }
 
-function classifyFlowConviction(score, change, newsBias, relativeVolume) {
-  if (score >= 82 && change > 0 && relativeVolume >= 1.4 && newsBias !== "BEARISH") return "HIGH CONVICTION";
-  if (score >= 68 && change > 0) return "MOMENTUM";
-  if (newsBias === "BEARISH" || change < -1.5) return "RISKY";
-  if (score >= 50) return "WATCHLIST";
-  return "LOW QUALITY";
+function classifyOptionsBucket({ callScore, putScore, preChange, relativeVolume, newsBias, qqq, vix }) {
+  if (preChange > 3.8 && relativeVolume < 1.2) return "AVOID";
+  if (callScore >= 70 && preChange > 0 && qqq >= -0.3 && newsBias !== "BEARISH") return "CALL";
+  if (putScore >= 68 && (preChange < 0 || newsBias === "BEARISH" || vix > 1.2)) return "PUT";
+  if (callScore < 48 && putScore < 48) return "AVOID";
+  return "WATCH";
 }
 
-function flowProxySummary(stock, conviction) {
-  if (conviction === "HIGH CONVICTION") return `${stock.sector}继续获得资金回流，盘前强势结构确认。`;
-  if (conviction === "MOMENTUM") return `${stock.sector}动量保持活跃，适合等待开盘确认。`;
-  if (conviction === "RISKY") return `${stock.sector}出现波动或负面催化，谨慎处理追单。`;
-  if (conviction === "WATCHLIST") return `${stock.sector}进入观察池，但攻击方向尚未完全确认。`;
-  return "动量、成交量与催化不足，交易质量偏低。";
+function optionsSignalSummary(stock, bucket, data) {
+  if (bucket === "CALL") return `${stock.sector}正股动量、相对成交量与指数方向共振，偏 CALL 观察。`;
+  if (bucket === "PUT") return `${stock.sector}价格或新闻偏弱，叠加波动风险，偏 PUT / 对冲观察。`;
+  if (bucket === "AVOID") return `涨幅、量能或波动结构不匹配，避免追高。`;
+  return `${stock.sector}进入期权观察池，但方向仍需开盘量价确认。`;
+}
+
+function optionsSignalRisk(bucket, data) {
+  if (bucket === "CALL" && data.preChange > 3) return "风险：跳空较大，优先等 VWAP 回踩。";
+  if (bucket === "PUT") return "风险：若 QQQ 快速转强，PUT 方向失效。";
+  if (bucket === "AVOID") return "风险：追高回撤或流动性不足。";
+  return "风险：仅为免费数据代理信号，不是真实期权大单。";
 }
 
 function calculateRiskRegime(indices) {
@@ -1525,15 +1553,15 @@ export async function buildSnapshot(req) {
     fallback: false,
     error: premarketMomentumData.error || null
   });
-  const optionProxyData = quotes.length ? deriveOptionsProxy(quotes, {
+  const optionsSignalData = quotes.length ? deriveOptionsSignalSystem(quotes, {
     sectors: sectorData,
     tradingView: tradingView.data || [],
-    reddit: reddit.data || {},
     news,
     relativeVolume: relativeVolumeLayer.data?.leaders || [],
-    earnings: earningsLayer.data?.events || [],
-    insider: insiderLayer.data?.signals || []
-  }) : [];
+    momentum: premarketMomentumData.leaders || [],
+    indices: marketData.data?.indices || [],
+    marketStatus: marketData.status || "unavailable"
+  }) : { status: "unavailable", callCandidates: [], putCandidates: [], watchOnly: [], avoidChasing: [], cards: [], error: "no_realtime_quotes" };
   const riskRegime = calculateRiskRegime(marketData.data?.indices || []);
   const marketBreadthData = buildMarketBreadth({
     quotes,
@@ -1569,8 +1597,8 @@ export async function buildSnapshot(req) {
     confidence: aggregateNewsConfidence,
     fallback: !selectedNewsSource
   }));
-  const unusualWhales = keepLastGood("unusualWhales", source("unusualWhales", optionProxyData, optionProxyData.length ? "delayed" : "unavailable", generatedAt, "Options Flow Proxy", {
-    error: optionProxyData.length ? null : "insufficient_realtime_quotes"
+  const unusualWhales = keepLastGood("unusualWhales", source("unusualWhales", optionsSignalData, optionsSignalData.cards?.length ? "delayed" : "unavailable", generatedAt, "Options Signal System", {
+    error: optionsSignalData.cards?.length ? null : (optionsSignalData.error || "insufficient_realtime_quotes")
   }));
   const xMacro = source("xMacro", [
     { source: "Macro Monitor", title: `${riskRegime.mode} 结构监控`, summary: riskRegime.mode === "Risk-On" ? "QQQ、VIX、DXY 与 TNX 组合支持科技风险偏好。" : "宏观变量仍需观察，避免无量追高。", tone: riskRegime.mode === "Risk-Off" ? "bearish" : "bullish" }
