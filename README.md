@@ -131,7 +131,7 @@ Vercel 设置建议：
 
 ```js
 window.DASHBOARD_CONFIG = {
-  refreshSeconds: 300,
+  refreshSeconds: 900,
   endpoints: {
     snapshot: "/api/snapshot"
   }
