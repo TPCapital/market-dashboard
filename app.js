@@ -1,9 +1,10 @@
 const CONFIG = window.DASHBOARD_CONFIG || {};
 const REFRESH_SECONDS = CONFIG.refreshSeconds || 300;
 const CACHE_PREFIX = "ai-us-equity-dashboard:";
+const INDEX_CACHE_KEY = `${CACHE_PREFIX}market-indices:lastKnownGood`;
 const FALLBACK_SNAPSHOT_LABEL = "快照数据（SNAPSHOT）";
 const CACHE_TRADABLE_MS = 15 * 60 * 1000;
-const STATUS_WEIGHT = { live: 1, delayed: 0.75, proxy: 0.35, cached: 0.25, snapshot: 0, unavailable: 0 };
+const STATUS_WEIGHT = { live: 1, delayed: 0.75, proxy: 0.35, cached: 0.25, stale: 0.12, snapshot: 0, unavailable: 0 };
 const SOURCE_WEIGHT = { marketData: 0.42, premarketMomentum: 0.2, marketBreadth: 0.16, tradingView: 0.12, relativeVolume: 0.1 };
 
 const sourceCatalog = {
@@ -68,7 +69,15 @@ const symbolMeta = {
 
 const fallback = {
   marketData: {
-    indices: [],
+    indices: [
+      metric("SPY", "S&P 500 ETF", 689.12, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("QQQ", "NASDAQ ETF", 612.4, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("NDX", "NASDAQ 100", 25172.18, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("VIX", "VOLATILITY", 13.62, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("TNX", "10Y YIELD", 4.12, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("DXY", "DOLLAR INDEX", 98.36, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。"),
+      metric("GOLD", "GOLD", 3378.4, 0, "内置结构快照，仅当外部源和本地缓存均不可用时显示。")
+    ],
     quotes: []
   },
   tradingView: [
@@ -201,6 +210,46 @@ function readSourceCache(sourceKey) {
   }
 }
 
+function writeIndexCache(indices = [], updatedAt = Date.now()) {
+  const usable = (indices || []).filter((item) => {
+    const value = Number(item?.value);
+    const quality = normalizeDataQuality(item?.dataQuality || item?.status);
+    return item?.id && Number.isFinite(value) && value > 0 && ["live", "delayed", "cached"].includes(quality);
+  });
+  if (!usable.length) return;
+  try {
+    const existing = readIndexCache();
+    const merged = new Map((existing || []).map((item) => [item.id, item]));
+    usable.forEach((item) => {
+      merged.set(item.id, {
+        ...item,
+        value: Number(item.value),
+        change: Number(item.change || 0),
+        dataQuality: normalizeDataQuality(item.dataQuality || item.status),
+        status: normalizeDataQuality(item.dataQuality || item.status),
+        updatedAt: Number(item.updatedAt || updatedAt || Date.now()),
+        source: item.source || "Market Data Cache",
+        note: item.note || "最近有效数据"
+      });
+    });
+    localStorage.setItem(INDEX_CACHE_KEY, JSON.stringify([...merged.values()]));
+  } catch (error) {
+    console.warn("index cache write skipped", error);
+  }
+}
+
+function readIndexCache() {
+  try {
+    const raw = localStorage.getItem(INDEX_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn("index cache read skipped", error);
+    return [];
+  }
+}
+
 async function loadServerSnapshot() {
   const url = endpoint("snapshot");
   if (!url) return null;
@@ -262,6 +311,7 @@ async function loadServerSnapshot() {
       fallback: Boolean(json.sources?.marketData?.fallback ?? !["live", "delayed"].includes(marketStatus))
     };
     writeSourceCache("marketData", sources.marketData.data, updatedAt, marketStatus);
+    writeIndexCache(indices, updatedAt);
   }
   if (json.breadth) {
     const status = normalizeDataQuality(json.breadth.status || json.sources?.marketBreadth?.status || marketStatus);
@@ -417,6 +467,7 @@ function normalizeDataQuality(status = "") {
   if (value === "delayed") return "delayed";
   if (value === "proxy") return "proxy";
   if (value === "cached") return "cached";
+  if (value === "stale") return "stale";
   if (value === "unavailable") return "unavailable";
   if (value === "fallback" || value === "snapshot" || value === "snapshot only") return "snapshot";
   if (String(status).toUpperCase() === "LIVE") return "live";
@@ -504,7 +555,7 @@ function freshnessLabel(updatedAt, status = "") {
 function qualityTimestamp(dataQuality, updatedAt) {
   if (updatedAt && dataQuality !== "snapshot") return formatClock(updatedAt);
   if (dataQuality === "snapshot") return "最新快照";
-  if (dataQuality === "unavailable") return "暂无可用源";
+  if (dataQuality === "unavailable") return "指数源同步中";
   return "--";
 }
 
@@ -623,13 +674,13 @@ function buildDashboard(sources) {
       })
     : {
         score: null,
-        mode: "暂无可用源",
+        mode: "指数源同步中",
         confidence: "低",
         dataQuality: "unavailable",
         tradable: false,
         reason: "核心行情不是 LIVE / DELAYED。",
-        conclusion: "等待可交易数据恢复后再评估方向。",
-        inputs: [["SPY", "不可用"], ["QQQ", "不可用"], ["VIX", "不可用"], ["可信度", "低"]]
+        conclusion: "当前展示最近有效数据，方向评估保持低置信度。",
+        inputs: [["SPY", "同步中"], ["QQQ", "同步中"], ["VIX", "同步中"], ["可信度", "低"]]
       };
   const risk = decision.marketRegime && sources.marketData.status === "live"
     ? riskFromDecisionEngine(decision.marketRegime, decision.strategySummary, indicesForScoring, decision.confidenceScore)
@@ -722,25 +773,29 @@ function latestDataTimestamp(sources) {
 
 function sanitizeIndices(indices = [], marketSource = {}) {
   const fallbackById = new Map(fallback.marketData.indices.map((item) => [item.id, item]));
+  const localById = new Map(readIndexCache().map((item) => [item.id, item]));
   const byId = new Map((indices || []).map((item) => [item.id, item]));
   const orderedIds = ["SPY", "QQQ", "NDX", "VIX", "TNX", "DXY", "GOLD"];
-  const dynamicIds = [...new Set([...orderedIds, ...byId.keys(), ...fallbackById.keys()])];
-  return dynamicIds.map((id) => {
-    const fallbackMetric = fallbackById.get(id) || { id, name: id, value: null, change: 0, note: "" };
+  const dynamicIds = [...new Set([...orderedIds, ...byId.keys(), ...localById.keys(), ...fallbackById.keys()])];
+  const sanitized = dynamicIds.map((id) => {
+    const fallbackMetric = fallbackById.get(id) || { id, name: id, value: null, change: 0, note: "指数源同步中" };
+    const cachedMetric = localById.get(id);
     const live = byId.get(id);
     const value = Number(live?.value);
     if (!Number.isFinite(value) || value <= 0) {
-      if (!fallbackById.has(id)) {
+      if (cachedMetric && Number.isFinite(Number(cachedMetric.value)) && Number(cachedMetric.value) > 0) {
         return {
+          ...cachedMetric,
           id,
-          name: id,
-          value: null,
-          change: 0,
-          dataQuality: "snapshot",
-          source: "Cached Snapshot",
-          updatedAt: null,
+          name: cachedMetric.name || fallbackMetric.name || id,
+          value: Number(cachedMetric.value),
+          change: Number(cachedMetric.change || 0),
+          dataQuality: "cached",
+          status: "cached",
+          source: cachedMetric.source || "Browser lastKnownGood",
+          updatedAt: Number(cachedMetric.updatedAt || 0) || null,
           isTradable: false,
-          note: "快照数据（SNAPSHOT）：当前指数源暂不可用，不参与核心评分。"
+          note: "最近有效数据 · 浏览器缓存"
         };
       }
       return {
@@ -748,18 +803,21 @@ function sanitizeIndices(indices = [], marketSource = {}) {
         value: fallbackMetric.value,
         change: fallbackMetric.change,
         dataQuality: "snapshot",
-        source: "Fallback Snapshot",
+        status: "snapshot",
+        source: "Built-in structural fallback",
         updatedAt: null,
         isTradable: false,
-        note: "缓存快照（SNAPSHOT）：仅作辅助参考。"
+        note: "最新快照 · 指数源同步中"
       };
     }
     const item = attachQuality(live, marketSource, marketSource.label, live.status || marketSource.status);
     return {
       ...item,
-      note: item.isTradable ? item.note : "缓存快照（SNAPSHOT）：仅作辅助参考。"
+      note: item.note || (item.isTradable ? "延迟数据" : "缓存快照")
     };
   }).filter(Boolean);
+  writeIndexCache(sanitized, marketSource.updatedAt || Date.now());
+  return sanitized;
 }
 
 function sourceModeLabel(sources) {
@@ -768,7 +826,7 @@ function sourceModeLabel(sources) {
   if (statuses.some((status) => status === "delayed")) return "延迟 + 结构化情报";
   if (statuses.some((status) => status === "proxy")) return "代理推断情报";
   if (statuses.some((status) => status === "cached")) return "缓存快照";
-  if (statuses.some((status) => status === "unavailable")) return "暂无可用源";
+  if (statuses.some((status) => status === "unavailable")) return "指数源同步中";
   return "最新快照";
 }
 
@@ -1138,10 +1196,10 @@ function calculatePremarketOpportunities(quotes, context) {
     return [{
       symbol: "--",
       name: "缓存快照",
-      sector: "暂无可用源",
+      sector: "指数源同步中",
       score: null,
       confidence: "低",
-      dataBasis: "API 完全不可用",
+      dataBasis: "最近有效数据",
       dataQuality: "unavailable",
       isTradable: false,
       signal: "DATA INSUFFICIENT",
@@ -1364,7 +1422,7 @@ function buildScannerStatus(opportunities, flows, risk, momentum = []) {
 
 function marketSummary(indices, risk = {}, breadth = {}, momentum = []) {
   const byId = Object.fromEntries(indices.map((item) => [item.id, item]));
-  if (![byId.SPY, byId.QQQ].some((item) => item?.value)) return "暂无可用核心行情，当前显示缓存快照。";
+  if (![byId.SPY, byId.QQQ].some((item) => item?.value)) return "指数源同步中，当前展示最近有效数据。";
   if (![byId.SPY, byId.QQQ].some((item) => item?.isTradable)) return "当前基于代理推断与延迟数据生成，方向置信度较低。";
   const leader = momentum[0]?.symbol;
   const breadthScore = Number(breadth.breadthScore || 0);
@@ -1400,13 +1458,13 @@ function calculateRiskRegime(indices, sentiment, retail, context = {}) {
   if (!usableCore.length) {
     return {
       score: null,
-      mode: "暂无可用源",
+      mode: "指数源同步中",
       confidence: "低",
       dataQuality: "unavailable",
       tradable: false,
-      reason: "核心指数行情为空。",
-      conclusion: "暂无可用核心行情，当前显示缓存快照。",
-      inputs: [["SPY", "暂无可用源"], ["QQQ", "暂无可用源"], ["VIX", "暂无可用源"], ["可信度", "低"]]
+      reason: "核心指数正在同步。",
+      conclusion: "指数源同步中，当前展示最近有效数据。",
+      inputs: [["SPY", "同步中"], ["QQQ", "同步中"], ["VIX", "同步中"], ["可信度", "低"]]
     };
   }
   const fearGreed = sentiment.find((item) => item.id === "Fear & Greed")?.value || 50;
@@ -1514,7 +1572,7 @@ function strategyFrom(risk, flows, retail, options, context = {}) {
 
 function tapeRead(movers, flows) {
   if (!movers.length && !flows.length) {
-    return { title: "缓存快照模式", reason: "行情与板块源暂不可用，展示最近一次有效结构。" };
+    return { title: "缓存快照模式", reason: "行情与板块源同步中，展示最近一次有效结构。" };
   }
   if (!movers.some((item) => item.isTradable) && !flows.some((item) => item.isTradable)) {
     return { title: "代理推断模式", reason: "当前基于代理推断与延迟数据生成。" };
@@ -1613,12 +1671,12 @@ function statusLabel(status, key = "") {
   if (status === "proxy") return "代理推断（PROXY）";
   if (status === "cached") return "缓存快照（CACHED）";
   if (status === "stale") return "延迟数据（STALE）";
-  if (status === "unavailable") return "暂无可用源（ERROR）";
+  if (status === "unavailable") return "指数源同步中（ERROR）";
   return "最新快照（SNAPSHOT）";
 }
 
 function displayRiskMode(mode) {
-  if (mode === "暂无可用源") return "暂无可用源";
+  if (mode === "指数源同步中") return "指数源同步中";
   if (mode === "Risk-On") return "风险偏好开启（Risk-On）";
   if (mode === "Risk-Off") return "风险规避（Risk-Off）";
   if (mode === "Neutral") return "中性（Neutral）";
@@ -1627,7 +1685,7 @@ function displayRiskMode(mode) {
 }
 
 function displayRiskModeHero(mode) {
-  if (mode === "暂无可用源") return "暂无可用源";
+  if (mode === "指数源同步中") return "指数源同步中";
   if (mode === "Risk-On") return "风险偏好";
   if (mode === "Risk-Off") return "风险规避";
   if (mode === "Neutral") return "中性";
@@ -1655,7 +1713,7 @@ function displayTradeState(value = "") {
     "AVOID CHASING": "避免追高",
     "LOW QUALITY": "低质量机会（Low Quality）",
     "LOW QUALITY / IGNORE": "低质量机会（Low Quality）",
-    "DATA INSUFFICIENT": "暂无可用源",
+    "DATA INSUFFICIENT": "指数源同步中",
     CONFIRMED: "已确认（Confirmed）",
     "EARLY ONLY": "仅早盘观察（Early Only）",
     "FAILED OPEN": "开盘失败（Failed Open）",
@@ -1673,7 +1731,6 @@ function displayTradeState(value = "") {
     "Strong Trend": "趋势强劲",
     "Early Only": "仅早盘观察",
     "Put Watch": "看跌观察",
-    "暂无可用源": "暂无可用源",
     WATCH: "观察"
   };
   return map[value] || value;
