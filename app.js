@@ -2181,27 +2181,34 @@ function opportunityCardHtml(item, isWatchlist = false) {
 
 function renderPremarketMomentum(items) {
   if (!items?.length) {
-    html("#momentumGrid", `<div class="empty-state">当前显示缓存快照；实时动能源恢复后自动更新。</div>`);
+    html("#momentumGrid", `<div class="empty-state visual-empty">当前显示缓存快照；实时动能源恢复后自动更新。</div>`);
     return;
   }
-  html("#momentumGrid", items.map((item, index) => `
-    <article class="opportunity-card ${item.momentumScore >= 80 ? "signal-long" : item.momentumScore >= 65 ? "signal-watch" : "signal-ignore"} quality-${escapeHtml(item.dataQuality || "snapshot")}">
-      <div class="opportunity-head">
-        <div>
-          <strong>${escapeHtml(item.symbol)}</strong>
-          <span>${escapeHtml(item.sector)} · ${escapeHtml(item.theme)}</span>
+  html("#momentumGrid", items.map((item, index) => {
+    const score = Number(item.momentumScore || 0);
+    const tier = score >= 80 ? "momentum-hot" : score >= 65 ? "momentum-watch" : score >= 45 ? "momentum-neutral" : "momentum-cold";
+    return `
+      <article class="momentum-card ${tier} quality-${escapeHtml(item.dataQuality || "snapshot")}">
+        <div class="momentum-rank">#${index + 1}</div>
+        <div class="momentum-score">
+          <b>${score}</b>
+          <span>动能评分</span>
         </div>
-        <b>${Number(item.momentumScore || 0)}</b>
-      </div>
-      <div class="signal-pill">#${index + 1} MOMENTUM SCORE</div>
-      <p>${escapeHtml(item.catalyst)}</p>
-      <div class="opportunity-meta">
-        <span>盘前 ${signed(item.premarketPercent)}</span>
-        <span>RVOL ${Number(item.relativeVolume || 0).toFixed(2)}x</span>
-        <span>${escapeHtml(statusLabel(item.dataQuality || "delayed"))}</span>
-      </div>
-    </article>
-  `).join(""));
+        <div class="momentum-main">
+          <div class="momentum-title">
+            <strong>${escapeHtml(item.symbol)}</strong>
+            <em>${escapeHtml(item.sector)} · ${escapeHtml(item.theme)}</em>
+          </div>
+          <p>${escapeHtml(item.catalyst)}</p>
+          <div class="momentum-tags">
+            <span class="${item.premarketPercent >= 0 ? "up" : "down"}">盘前 ${signed(item.premarketPercent)}</span>
+            <span>RVOL ${Number(item.relativeVolume || 0).toFixed(2)}x</span>
+            <span>${escapeHtml(statusLabel(item.dataQuality || "delayed"))}</span>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join(""));
 }
 
 function renderTradePlan(plan) {
