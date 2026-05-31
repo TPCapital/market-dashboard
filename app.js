@@ -1795,8 +1795,42 @@ function render(dashboard) {
   renderFlows(dashboard.flows);
   renderStars(dashboard.stars);
   renderNews(dashboard.news);
+  renderCommandDeck(dashboard);
   renderProWorkspaces(dashboard);
   setLoading(false);
+}
+
+
+function renderCommandDeck(dashboard) {
+  const risk = dashboard.risk || {};
+  const topFlow = (dashboard.flows || [])[0] || {};
+  const topOpportunity = (dashboard.opportunities || []).find((item) => item?.symbol && !String(item.symbol).includes("--")) || {};
+  const topMover = (dashboard.movers || [])[0] || {};
+  const byId = Object.fromEntries((dashboard.indices || []).map((item) => [item.id, item]));
+  const vixChange = Number(byId.VIX?.change || 0);
+  const tnxChange = Number(byId.TNX?.change || 0);
+  const dxyChange = Number(byId.DXY?.change || 0);
+  const riskAlert = risk.mode === "Risk-Off" || vixChange > 3 || tnxChange > 1 || dxyChange > 0.4;
+  const action = risk.mode === "Risk-On"
+    ? "回踩做强势"
+    : risk.mode === "Risk-Off"
+      ? "降低追涨"
+      : "等待确认";
+  text("#deckRiskMode", displayRiskModeHero(risk.mode));
+  text("#deckRiskScore", risk.score === null || risk.score === undefined ? `置信度 ${risk.confidence || "低"}` : `Score ${risk.score} · 置信度 ${risk.confidence || "中"}`);
+  text("#deckMainTheme", topFlow.sector || "等待确认");
+  text("#deckThemeScore", topFlow.score ? `Heat ${topFlow.score} · ${signed(topFlow.change || 0)}` : "Heat --");
+  text("#deckTopOpportunity", topOpportunity.symbol ? `${topOpportunity.symbol} ${topOpportunity.score ?? "观察"}` : (topMover.symbol ? `${topMover.symbol} ${signed(topMover.change)}` : "--"));
+  text("#deckOpportunitySignal", topOpportunity.signal ? displayTradeState(topOpportunity.signal) : (topMover.reason || "等待量价"));
+  text("#deckRiskAlert", riskAlert ? "风险升温" : "风险可控");
+  text("#deckRiskDetail", `VIX ${signed(vixChange)} · 10Y ${signed(tnxChange)} · DXY ${signed(dxyChange)}`);
+  text("#deckActionBias", action);
+  text("#deckActionDetail", dashboard.strategy || "等待开盘确认");
+  const deck = document.querySelector(".command-deck");
+  if (deck) {
+    deck.dataset.alert = riskAlert ? "on" : "off";
+    deck.dataset.mode = riskDatasetValue(risk.mode);
+  }
 }
 
 function renderModuleStatus(statusMap) {
@@ -2113,26 +2147,32 @@ function renderOpportunities(items = [], watchlist = []) {
 }
 
 function opportunityCardHtml(item, isWatchlist = false) {
+  const scoreText = item.score === null ? "观察" : item.score;
   return `
     <article class="opportunity-card ${signalClass(item.signal)} ${isWatchlist ? "watchlist-card" : ""} quality-${escapeHtml(item.dataQuality || "snapshot")}">
-      <div class="opportunity-head">
-        <div>
-          <strong>${escapeHtml(item.symbol)}</strong>
-          <span>${escapeHtml(item.sector)}</span>
+      <div class="opportunity-score-block">
+        <b>${escapeHtml(scoreText)}</b>
+        <span>${isWatchlist ? "WATCH" : "SCORE"}</span>
+      </div>
+      <div class="opportunity-body">
+        <div class="opportunity-head">
+          <div>
+            <strong>${escapeHtml(item.symbol)}</strong>
+            <span>${escapeHtml(item.sector)}</span>
+          </div>
+          <em>${escapeHtml(item.confidence === "低" ? "低置信" : `${item.confidence || "观察"}置信`)}</em>
         </div>
-        <b>${item.score === null ? "观察" : item.score}</b>
-      </div>
-      <div class="signal-pill">${isWatchlist ? "观察名单 · " : ""}${escapeHtml(displayTradeState(item.signal))}</div>
-      <p>${escapeHtml(item.logic)}</p>
-      <div class="opportunity-meta">
-        <span>${escapeHtml(item.confidence === "低" ? "等待盘前确认" : `可信度 ${item.confidence || "等待确认"}`)}</span>
-        <span>${escapeHtml(item.dataBasis || "等待盘前确认")}</span>
-        <span>${Number(item.relativeVolume) > 0 ? `RVOL ${Number(item.relativeVolume).toFixed(2)}x` : "RVOL 等待确认"}</span>
-        <span>${escapeHtml(displayTradeState(item.vwapBias))}</span>
-        <span>${escapeHtml(displayTradeState(item.openingConfirmation))}</span>
-      </div>
-      <div class="risk-tags">
-        ${(item.riskTags || []).map((tag) => `<span>${escapeHtml(displayTradeState(tag))}</span>`).join("")}
+        <div class="signal-pill">${isWatchlist ? "观察名单 · " : ""}${escapeHtml(displayTradeState(item.signal))}</div>
+        <p>${escapeHtml(item.logic)}</p>
+        <div class="opportunity-meta">
+          <span>${escapeHtml(item.dataBasis || "等待盘前确认")}</span>
+          <span>${Number(item.relativeVolume) > 0 ? `RVOL ${Number(item.relativeVolume).toFixed(2)}x` : "RVOL 等待确认"}</span>
+          <span>${escapeHtml(displayTradeState(item.vwapBias))}</span>
+          <span>${escapeHtml(displayTradeState(item.openingConfirmation))}</span>
+        </div>
+        <div class="risk-tags">
+          ${(item.riskTags || []).map((tag) => `<span>${escapeHtml(displayTradeState(tag))}</span>`).join("")}
+        </div>
       </div>
     </article>
   `;
@@ -2223,13 +2263,13 @@ function renderStars(items) {
 }
 
 function renderNews(items) {
-  html("#newsGrid", items.map((item) => `
-    <article class="news-card ${newsBiasClass(item.bias)}">
+  html("#newsGrid", items.map((item, index) => `
+    <article class="news-card ${newsBiasClass(item.bias)} news-priority-${index < 2 ? "high" : index < 5 ? "mid" : "low"}">
       <details>
         <summary>
           <span class="news-head">
             <span><b>${escapeHtml(item.ticker)}</b><em>${escapeHtml(item.sector)}</em></span>
-            <span class="${item.bias === "BEARISH" ? "down" : item.bias === "BULLISH" ? "up" : "flat"}">${escapeHtml(displayNewsBias(item.bias))} · ${escapeHtml(item.time)}</span>
+            <span class="${item.bias === "BEARISH" ? "down" : item.bias === "BULLISH" ? "up" : "flat"}">${index < 2 ? "★ " : ""}${escapeHtml(displayNewsBias(item.bias))} · ${escapeHtml(item.time)}</span>
           </span>
           <strong class="news-title-cn">${escapeHtml(item.title)}</strong>
           <em class="news-title-en">Original: ${escapeHtml(item.originalTitle)}</em>
