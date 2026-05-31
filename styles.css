@@ -2468,3 +2468,169 @@ body[data-risk="neutral"] .strategy-panel h2 {
   .momentum-score b { font-size: 40px !important; }
   .playbook-card { min-height: auto !important; }
 }
+
+/* === V6.2 Typography & Readability Audit Fix ===
+   Goal: restore professional hierarchy after V6 decision upgrade.
+   Fixes oversized execution text and weak AI Watchlist visual emphasis. */
+
+/* 1) Execution tendency card: prevent huge broken Chinese line wrapping. */
+.decision-action-box {
+  min-height: 180px !important;
+  padding: 22px 24px !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  overflow: hidden !important;
+}
+.decision-action-box span {
+  font-size: 13px !important;
+  letter-spacing: .08em !important;
+  color: var(--muted) !important;
+}
+.decision-action-box strong {
+  font-size: clamp(48px, 5.1vw, 86px) !important;
+  line-height: .92 !important;
+  letter-spacing: -.07em !important;
+  max-width: 100% !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+  text-wrap: balance !important;
+}
+.decision-action-box em {
+  max-width: 100% !important;
+  color: var(--soft) !important;
+  font-size: clamp(15px, 1.1vw, 18px) !important;
+  font-weight: 850 !important;
+  line-height: 1.45 !important;
+}
+@media (max-width: 1280px) {
+  .decision-action-box strong { font-size: clamp(40px, 6vw, 68px) !important; white-space: normal !important; }
+}
+@media (max-width: 760px) {
+  .decision-action-box { min-height: 150px !important; padding: 18px !important; }
+  .decision-action-box strong { font-size: clamp(38px, 12vw, 58px) !important; }
+}
+
+/* 2) AI Watchlist: make cards scannable: ticker / score / trend / note / levels. */
+.watchlist-grid {
+  grid-template-columns: repeat(4, minmax(260px, 1fr)) !important;
+  gap: 14px !important;
+}
+.watch-card {
+  min-height: 190px !important;
+  padding: 18px 18px 16px !important;
+  border-radius: 18px !important;
+  border: 1px solid rgba(255,255,255,.13) !important;
+  border-top: 3px solid rgba(213,173,91,.55) !important;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(106,168,255,.10), transparent 34%),
+    linear-gradient(180deg, rgba(23,26,34,.985), rgba(8,10,14,.992)) !important;
+  box-shadow: 0 22px 70px rgba(0,0,0,.44) !important;
+}
+.watch-card:nth-child(4n+1),
+.watch-card:nth-child(4n+2) { border-top-color: rgba(30,215,130,.66) !important; }
+.watch-card:nth-child(4n+3) { border-top-color: rgba(213,173,91,.68) !important; }
+.watch-card:hover {
+  transform: translateY(-3px) !important;
+  border-color: rgba(89,215,232,.30) !important;
+  box-shadow: 0 26px 90px rgba(0,0,0,.52), 0 0 26px rgba(89,215,232,.08) !important;
+}
+.watch-card .watch-symbol {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  margin-bottom: 4px !important;
+}
+.watch-card .watch-symbol strong {
+  font-size: clamp(30px, 2vw, 42px) !important;
+  line-height: .9 !important;
+  font-weight: 950 !important;
+  letter-spacing: -.04em !important;
+  color: var(--text) !important;
+}
+.watch-card .watch-symbol span {
+  min-width: 46px !important;
+  text-align: right !important;
+  color: var(--gold) !important;
+  font-size: clamp(20px, 1.3vw, 28px) !important;
+  line-height: 1 !important;
+  font-weight: 950 !important;
+}
+.watch-card .panel-label {
+  margin: 0 0 10px !important;
+  color: var(--muted) !important;
+  font-size: 13px !important;
+  font-weight: 850 !important;
+  letter-spacing: .02em !important;
+}
+.watch-card h3 {
+  margin: 0 0 10px !important;
+  color: var(--text) !important;
+  font-size: clamp(20px, 1.35vw, 28px) !important;
+  line-height: 1.12 !important;
+  font-weight: 950 !important;
+  letter-spacing: -.035em !important;
+}
+.watch-card > p:not(.panel-label) {
+  margin: 0 0 14px !important;
+  color: var(--soft) !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 2 !important;
+  -webkit-box-orient: vertical !important;
+  overflow: hidden !important;
+}
+.watch-card .mini-tags {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 7px !important;
+  margin-top: auto !important;
+}
+.watch-card .mini-tags span {
+  padding: 6px 9px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,.12) !important;
+  background: rgba(255,255,255,.045) !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}
+
+/* 3) System-wide typography hierarchy: reduce text noise and strengthen key labels. */
+.section-title h2 {
+  letter-spacing: -.035em !important;
+}
+.metric-value,
+.option-score,
+.heat-score,
+.momentum-score b,
+.v6-opportunity-row b {
+  font-variant-numeric: tabular-nums !important;
+}
+.feed-item p,
+.news-card p,
+.metric-card p,
+.source-card p,
+.flow-card p,
+.star-card p,
+.opportunity-card p,
+.playbook-card p {
+  color: var(--soft) !important;
+  line-height: 1.55 !important;
+}
+.tag,
+.signal-pill,
+.risk-tags span,
+.mini-tags span {
+  white-space: nowrap !important;
+}
+
+@media (max-width: 1320px) {
+  .watchlist-grid { grid-template-columns: repeat(2, minmax(260px, 1fr)) !important; }
+}
+@media (max-width: 760px) {
+  .watchlist-grid { grid-template-columns: 1fr !important; }
+  .watch-card { min-height: auto !important; }
+}

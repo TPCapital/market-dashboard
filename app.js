@@ -1849,10 +1849,10 @@ function renderV6DecisionLayer(dashboard) {
   const riskOn = mode === "Risk-On";
   const riskOff = mode === "Risk-Off";
   const actionBias = riskOn
-    ? "CALL 优先，回踩做强势"
+    ? "CALL 优先"
     : riskOff
-      ? "降风险，PUT / 对冲观察"
-      : "观察优先，等待确认";
+      ? "降风险"
+      : "等待确认";
   const title = riskOn
     ? "风险偏好开启，优先寻找主线顺势机会"
     : riskOff
@@ -1868,7 +1868,7 @@ function renderV6DecisionLayer(dashboard) {
   text("#v6DecisionTitle", title);
   text("#v6DecisionSummary", summary);
   text("#v6ActionBias", actionBias);
-  text("#v6ActionRule", riskOn ? "只做 VWAP 上方放量延续，不追无量跳空" : riskOff ? "先看 SPY / QQQ 是否跌破 VWAP，再考虑 PUT" : "等开盘 15 分钟，确认 QQQ / VIX / 10Y 方向");
+  text("#v6ActionRule", riskOn ? "只做 VWAP 上方放量延续；不追无量跳空。" : riskOff ? "先看 SPY / QQQ 是否跌破 VWAP，再考虑 PUT。" : "等开盘 15 分钟，确认 QQQ / VIX / 10Y 方向。");
 
   const checks = [
     decisionCheck("QQQ", indices.QQQ?.change ?? indices.NDX?.change, "科技权重方向"),
