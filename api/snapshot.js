@@ -173,6 +173,9 @@ const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
 const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 const LAST_KNOWN_GOOD_TTL_MS = 6 * 60 * 60 * 1000;
+const SOURCE_MANAGER_TIMEOUT_MS = 4200;
+const CRITICAL_SOURCE_TIMEOUT_MS = 5200;
+const CRITICAL_SOURCES = new Set(["twelveData", "tradingView", "marketData"]);
 const LAST_KNOWN_GOOD_KEY = "market-dashboard:lastKnownGood";
 const SOURCE_PLANS = {
   marketData: { primary: "Finnhub quotes", backups: ["TwelveData", "TradingView Screener", "AlphaVantage / Stooq", "lastKnownGood cache"] },
@@ -511,19 +514,21 @@ function lastOrFallback(key, fallbackData = null) {
 
 async function settleSource(key, loader, generatedAt, fallbackData = null, label) {
   const plan = sourcePlanFor(key);
-  const maxAttempts = 2;
+  const maxAttempts = 1;
+  const timeoutMs = CRITICAL_SOURCES.has(key) ? CRITICAL_SOURCE_TIMEOUT_MS : SOURCE_MANAGER_TIMEOUT_MS;
   let lastError = null;
   let loaded = null;
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        loaded = await loader({ attempt, timeoutMs: attempt === 1 ? 9000 : 12000 });
+        loaded = await loader({ attempt, timeoutMs });
         break;
       } catch (error) {
         lastError = error;
         console.error(`${SOURCE_DEBUG_PREFIX} sourceManager attempt failed`, {
           source: key,
           attempt,
+          timeoutMs,
           primary: plan.primary,
           backups: plan.backups,
           message: error?.message || String(error)
@@ -629,7 +634,7 @@ function statusTextForIndex(dataQuality) {
 
 async function fetchYahooChartIndex(providerSymbol, indexId) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}?interval=1m&range=1d`;
-  const payload = await fetchJsonWithDebug("YAHOO_CHART_INDEX", url, { timeoutMs: 8000 });
+  const payload = await fetchJsonWithDebug("YAHOO_CHART_INDEX", url, { timeoutMs: 4000 });
   const result = payload?.chart?.result?.[0];
   const meta = result?.meta || {};
   const price = Number(meta.regularMarketPrice || meta.chartPreviousClose || 0);
@@ -994,7 +999,7 @@ async function loadFinnhubMarketData(symbols) {
     const endpoint = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=***`;
     try {
       const startedAt = Date.now();
-      const payload = await fetchJsonWithDebug("FINNHUB", `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=${encodeURIComponent(token)}`, { timeoutMs: 8000 });
+      const payload = await fetchJsonWithDebug("FINNHUB", `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol(symbol))}&token=${encodeURIComponent(token)}`, { timeoutMs: 4000 });
       const latencyMs = Date.now() - startedAt;
       latencies.push(latencyMs);
       console.log("[snapshot:finnhub] fetch success", { symbol, endpoint, responseCode: 200, latencyMs });
@@ -1134,7 +1139,7 @@ async function loadTwelveDataMarketData(symbols) {
     const endpoint = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=***`;
     try {
       const startedAt = Date.now();
-      const pricePayload = await fetchJsonWithDebug("TWELVEDATA", `https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+      const pricePayload = await fetchJsonWithDebug("TWELVEDATA", `https://api.twelvedata.com/price?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4200 });
       const latencyMs = Date.now() - startedAt;
       latencies.push(latencyMs);
       console.log("[snapshot:twelvedata] fetch success", { symbol, providerSymbol: provider, endpoint, responseCode: 200, latencyMs });
@@ -1145,7 +1150,7 @@ async function loadTwelveDataMarketData(symbols) {
       }
       let quotePayload = {};
       try {
-        quotePayload = await fetchJsonWithDebug("TWELVEDATA_QUOTE", `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+        quotePayload = await fetchJsonWithDebug("TWELVEDATA_QUOTE", `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(provider)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4200 });
       } catch (error) {
         console.error("TWELVEDATA ERROR:", { symbol, providerSymbol: provider, responseCode: responseCodeFromError(error), reason: error.message });
       }
@@ -1201,14 +1206,14 @@ async function fetchAlphaVantageQuote(symbol) {
   const token = envValue("ALPHAVANTAGE_API_KEY");
   if (!token) return null;
   if (symbol === "GC=F" || symbol === "GOLD") {
-    const payload = await fetchJson(`https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey=${encodeURIComponent(token)}`, { timeoutMs: 7000 });
+    const payload = await fetchJson(`https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4000 });
     const row = payload["Realtime Currency Exchange Rate"];
     const price = Number(row?.["5. Exchange Rate"]);
     if (!Number.isFinite(price) || price <= 0) return null;
     return { symbol, price, change: 0, regularChange: 0, volume: 0, averageVolume: 0, dataStatus: "DELAYED", provider: "AlphaVantage" };
   }
   if (symbol === "^TNX" || symbol === "TNX") {
-    const payload = await fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 7000 });
+    const payload = await fetchJson(`https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4000 });
     const latest = Array.isArray(payload.data) ? payload.data.find((item) => Number.isFinite(Number(item.value))) : null;
     const previous = Array.isArray(payload.data) ? payload.data.find((item) => item !== latest && Number.isFinite(Number(item.value))) : null;
     const price = Number(latest?.value);
@@ -1218,7 +1223,7 @@ async function fetchAlphaVantageQuote(symbol) {
   }
   const alphaSymbol = symbol === "DX-Y.NYB" ? "DXY" : symbol === "GOLD" ? "XAUUSD" : symbol.replace(/^\^/, "");
   if (!/^[A-Z.]+$/.test(alphaSymbol)) return null;
-  const payload = await fetchJson(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(alphaSymbol)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 7000 });
+  const payload = await fetchJson(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(alphaSymbol)}&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4000 });
   const row = payload["Global Quote"];
   const price = Number(row?.["05. price"]);
   const changeRaw = String(row?.["10. change percent"] || "").replace("%", "");
@@ -1544,7 +1549,7 @@ async function loadBenzingaNews() {
   }
   const url = `https://api.benzinga.com/api/v2/news?token=${encodeURIComponent(key)}&channels=markets,stocks,wiim,analyst,earnings&displayOutput=full&pagesize=20`;
   try {
-    const payload = await fetchJsonWithDebug("BENZINGA_NEWS", url, { timeoutMs: 10000 });
+    const payload = await fetchJsonWithDebug("BENZINGA_NEWS", url, { timeoutMs: 4500 });
     const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
     const normalized = normalizeNewsFeed(rows.map((row) => ({
       title: row.title,
@@ -1601,7 +1606,7 @@ async function loadFinnhubCompanyNews(symbols) {
   const fmt = (date) => date.toISOString().slice(0, 10);
   const companyNews = await Promise.all(tickers.map(async (symbol) => {
     try {
-      const payload = await fetchJson(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${fmt(from)}&to=${fmt(to)}&token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+      const payload = await fetchJson(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${fmt(from)}&to=${fmt(to)}&token=${encodeURIComponent(token)}`, { timeoutMs: 4200 });
       return (Array.isArray(payload) ? payload : []).slice(0, 3).map((item) => ({ ...item, relatedSymbol: symbol }));
     } catch {
       return [];
@@ -1614,7 +1619,7 @@ async function loadFinnhubMarketNews() {
   const token = envValue("FINNHUB_API_KEY");
   if (!token) return [];
   try {
-    const payload = await fetchJson(`https://finnhub.io/api/v1/news?category=general&token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+    const payload = await fetchJson(`https://finnhub.io/api/v1/news?category=general&token=${encodeURIComponent(token)}`, { timeoutMs: 4200 });
     return Array.isArray(payload) ? payload.slice(0, 30) : [];
   } catch {
     return [];
@@ -1651,7 +1656,7 @@ async function loadFinnhubEarnings(symbols) {
   const token = envValue("FINNHUB_API_KEY");
   if (!token) return { data: [], status: "unavailable", label: "Finnhub Earnings", error: "FINNHUB_API_KEY is not configured" };
   try {
-    const payload = await fetchJson(`https://finnhub.io/api/v1/calendar/earnings?token=${encodeURIComponent(token)}`, { timeoutMs: 9000 });
+    const payload = await fetchJson(`https://finnhub.io/api/v1/calendar/earnings?token=${encodeURIComponent(token)}`, { timeoutMs: 4200 });
     const list = (payload.earningsCalendar || [])
       .filter((item) => cleanSymbols(symbols).split(",").includes(item.symbol))
       .slice(0, 20)
@@ -1678,15 +1683,15 @@ async function loadAlphaVantageMacro() {
   try {
     const startedAt = Date.now();
     const [dgs10, dgs2, sector] = await Promise.all([
-      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_10Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_10Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4200 }).catch((error) => {
         console.error("ALPHAVANTAGE ERROR:", { function: "TREASURY_YIELD_10Y", reason: error.message });
         return null;
       }),
-      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_2Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=2year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+      fetchJsonWithDebug("ALPHAVANTAGE_TREASURY_2Y", `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=2year&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4200 }).catch((error) => {
         console.error("ALPHAVANTAGE ERROR:", { function: "TREASURY_YIELD_2Y", reason: error.message });
         return null;
       }),
-      fetchJsonWithDebug("ALPHAVANTAGE_SECTOR", `https://www.alphavantage.co/query?function=SECTOR&apikey=${encodeURIComponent(token)}`, { timeoutMs: 9000 }).catch((error) => {
+      fetchJsonWithDebug("ALPHAVANTAGE_SECTOR", `https://www.alphavantage.co/query?function=SECTOR&apikey=${encodeURIComponent(token)}`, { timeoutMs: 4200 }).catch((error) => {
         console.error("ALPHAVANTAGE ERROR:", { function: "SECTOR", reason: error.message });
         return null;
       })
@@ -1710,7 +1715,7 @@ async function loadFredMacro() {
     try {
       const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(id)}&api_key=${encodeURIComponent(token)}&file_type=json&sort_order=desc&limit=1`;
       const rowStart = Date.now();
-      const payload = await fetchJsonWithDebug("FRED", url, { timeoutMs: 9000 });
+      const payload = await fetchJsonWithDebug("FRED", url, { timeoutMs: 4200 });
       latencies.push(Date.now() - rowStart);
       const latest = payload.observations?.[0];
       return { id, date: latest?.date, value: latest?.value };
