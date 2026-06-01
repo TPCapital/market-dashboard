@@ -11,6 +11,7 @@ import { buildStrategySummary } from "../lib/strategy-engine.js";
 import { buildTradePlan } from "../lib/trade-plan.js";
 import { buildWatchlist } from "../lib/watchlist-engine.js";
 import { buildMarketStructurePro } from "../lib/market-structure-pro.js";
+import { buildTradeDecision } from "../lib/trade-decision-engine.js";
 
 const MARKET_SYMBOLS = {
   SPY: "SPY",
@@ -38,6 +39,7 @@ const sourceCatalog = {
   fedWatch: "FedWatch Proxy",
   breadthPro: "Breadth Pro",
   decisionEngine: "Decision Engine",
+  tradeDecision: "Trade Decision Engine",
   newsAggregator: "News Aggregator",
   marketData: "Multi-source Market Data",
   tradingView: "TradingView Screener",
@@ -2623,10 +2625,50 @@ export async function buildSnapshot(req) {
   } catch (error) {
     console.error("[SNAPSHOT ENGINE ERROR] tradePlan", error?.message || error);
   }
+  let tradeDecision = {
+    grade: "C",
+    score: 50,
+    direction: "WAIT",
+    permission: "只看不做",
+    actionBias: "等待确认",
+    title: "C｜等待确认",
+    summary: "等待开盘量价确认。",
+    targets: [],
+    focus: [],
+    avoid: ["无量高开不追。"],
+    checklist: []
+  };
+  try {
+    tradeDecision = buildTradeDecision({
+      marketRegime,
+      riskRegime,
+      strategySummary,
+      tradePlan,
+      watchlist,
+      signalEngine,
+      marketStructurePro: marketStructureProSource.data || marketStructureProData || {},
+      marketBreadth: marketBreadthLayer.data || marketBreadthData || {},
+      premarketMomentum: premarketMomentumLayer.data || premarketMomentumData || {},
+      relativeVolume: relativeVolumeLayer.data || {},
+      marketData: normalizedMarketDataSource.data || { indices: normalizedMarketDataSource.indices || [], quotes: normalizedMarketDataSource.quotes || [] },
+      newsCatalysts: newsCatalystsSource.data || newsCatalysts || {},
+      optionsSignals: optionsSignalsSource.data || optionsSignalData || [],
+      confidenceScore,
+      scanner: premarketScanner || []
+    });
+  } catch (error) {
+    console.error("[SNAPSHOT ENGINE ERROR] tradeDecision", error?.message || error);
+  }
+  const tradeDecisionSource = source("tradeDecision", tradeDecision, normalizedMarketDataSource.status === "live" ? "live" : normalizedMarketDataSource.status === "delayed" ? "delayed" : "proxy", generatedAt, "Trade Decision Engine", {
+    confidence: tradeDecision.confidence || confidenceScore.tradeConfidence,
+    fallback: false
+  });
+
   const decisionEngine = source("decisionEngine", {
     strategySummary,
     marketRegime,
     tradePlan,
+    tradeDecision,
     watchlist,
     confidenceScore
   }, normalizedMarketDataSource.status === "live" ? "live" : normalizedMarketDataSource.status === "delayed" ? "delayed" : "unavailable", generatedAt, "Decision Engine", {
@@ -2680,6 +2722,7 @@ export async function buildSnapshot(req) {
     strategySummary,
     marketRegime,
     tradePlan,
+    tradeDecision,
     watchlist,
     confidenceScore,
     layers: {
@@ -2715,6 +2758,7 @@ export async function buildSnapshot(req) {
       strategySummary,
       marketRegime,
       tradePlan,
+      tradeDecision,
       watchlist,
       confidenceScore,
       tradeSignals: signalEngine,
@@ -2736,6 +2780,7 @@ export async function buildSnapshot(req) {
         fedWatch: source("fedWatch", marketStructureProData.fedWatch || {}, marketStructureProData.fedWatch?.status || "proxy", generatedAt, "FedWatch Proxy", { confidence: marketStructureProData.fedWatch?.confidence || "LOW" }),
         breadthPro: source("breadthPro", marketStructureProData.breadthPro || {}, marketStructureProData.breadthPro?.status || "proxy", generatedAt, "Breadth Pro", { confidence: marketStructureProData.breadthPro?.confidence || "LOW" }),
         decisionEngine,
+        tradeDecision: tradeDecisionSource,
         marketData: normalizedMarketDataSource,
         reddit,
         tradingView,

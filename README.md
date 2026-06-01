@@ -335,3 +335,61 @@ Deep 模式会尝试更多外部源，适合手动刷新缓存，不建议作为
 - Oil：已加 WTI / Brent 结构与 fallback；真实价格依赖 TwelveData/Yahoo/后续数据源可用性。
 - FedWatch：已实现 Proxy，暂未接入 CME 官方概率。
 - Breadth Pro：已实现代理均线参与度；暂未接入真实全市场 >20MA/>50MA/>200MA。
+
+
+## V6.7 P3 AI Narrative Engine
+
+本版新增 P3 分析叙事层，不再只展示数据，而是将 `/api/snapshot` 转化为中文市场解读与交易计划。
+
+新增能力：
+
+- `/api/daily-report` 生成 00-15 节结构化中文日报。
+- `lib/narrative-engine.js` 提供规则版叙事引擎，未配置 AI key 也能生成可读报告。
+- 支持可选 Claude / OpenAI：
+  - `ANTHROPIC_API_KEY` 或 `CLAUDE_API_KEY`
+  - `OPENAI_API_KEY`
+  - `NARRATIVE_PROVIDER=claude|openai|rules|auto`
+- Dashboard 的“收盘日报”工作区会在点击时请求 `/api/daily-report`，避免拖慢首页快照。
+- 不新增前端“完成度”模块，P0/P1/P2/P3 进度只写在文档，不展示给用户。
+
+验证方式：
+
+```txt
+/api/daily-report
+/api/daily-report?rules=1
+/api/daily-report?provider=claude
+/api/daily-report?provider=openai
+```
+
+如果没有 AI key，系统自动使用规则版中文解释层；如果有 AI key，则优先使用 AI 生成更自然的日报。
+
+## P4 Trade Decision Engine
+
+本版新增 P4 交易决策引擎，目标不是继续展示更多数据，而是把 P0/P1/P2/P3 产生的数据转化为可执行交易语言。
+
+新增能力：
+
+- `/api/trade-decision`：独立交易决策接口。
+- `lib/trade-decision-engine.js`：根据 Market Regime、Opportunity Board、Premarket Momentum、Breadth、VIX、QQQ/SPY、Options Proxy 生成交易等级。
+- Snapshot 顶层新增 `tradeDecision` 字段。
+- `sources.tradeDecision` 与 `sources.decisionEngine.data.tradeDecision` 同步输出。
+- 前端“明日交易计划”工作区升级为 P4 交易决策展示。
+
+P4 输出字段：
+
+- `grade`：A+ / A / B / C / NO TRADE
+- `direction`：CALL / PUT-HEDGE / WAIT
+- `permission`：允许进攻 / 轻仓观察 / 只看不做 / 禁止交易
+- `probability`：交易环境概率评分
+- `targets`：目标股票、方向、入场触发、失效条件
+- `checklist`：大盘同向、波动率、宽度、目标数量、开盘确认
+- `riskControl`：最大尝试次数、止损规则、时间规则
+
+验证方式：
+
+```txt
+/api/snapshot
+/api/trade-decision
+```
+
+注意：P4 仍是交易辅助系统，不是自动下单系统，也不构成投资建议。

@@ -18,6 +18,7 @@ const sourceCatalog = {
   premarketMomentum: "Premarket Momentum Engine",
   marketBreadth: "Market Breadth Engine",
   decisionEngine: "Decision Engine",
+  tradeDecision: "Trade Decision Engine",
   newsAggregator: "News Aggregator",
   marketData: "Multi-source Market Data / Finnhub primary",
   tradingView: "TradingView Screener",
@@ -328,6 +329,7 @@ async function loadServerSnapshot() {
   const strategySummary = json.strategySummary || null;
   const marketRegime = json.marketRegime || null;
   const tradePlan = json.tradePlan || null;
+  const tradeDecision = json.tradeDecision || json.sources?.tradeDecision?.data || json.sources?.decisionEngine?.data?.tradeDecision || null;
   const watchlist = json.watchlist || null;
   if (window.DEBUG_FRONTEND === true) {
     console.log("[FRONTEND SNAPSHOT]", json);
@@ -446,7 +448,7 @@ async function loadServerSnapshot() {
       fallback: Boolean(json.premarket.momentum.fallback)
     };
   }
-  if (strategySummary || marketRegime || tradePlan || watchlist || json.confidenceScore) {
+  if (strategySummary || marketRegime || tradePlan || tradeDecision || watchlist || json.confidenceScore) {
     const status = normalizeDataQuality(json.sources?.decisionEngine?.status || marketStatus || "delayed");
     const updatedAt = Number(json.generatedAt || Date.now());
     sources.decisionEngine = {
@@ -454,6 +456,7 @@ async function loadServerSnapshot() {
         strategySummary,
         marketRegime,
         tradePlan,
+        tradeDecision,
         watchlist,
         confidenceScore: json.confidenceScore
       },
@@ -534,6 +537,7 @@ function fallbackSources() {
     premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
     marketBreadth: fallbackSource("marketBreadth", {}),
     decisionEngine: fallbackSource("decisionEngine", {}),
+    tradeDecision: fallbackSource("tradeDecision", {}),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
     finnhubInsider: fallbackSource("finnhubInsider", []),
     finnhubEarnings: fallbackSource("finnhubEarnings", []),
@@ -730,6 +734,28 @@ function tradePlanFromDecision(plan = {}, watchlist = {}) {
   };
 }
 
+function tradePlanFromTradeDecision(decision = {}, fallbackPlan = {}) {
+  const focus = Array.isArray(decision.focus) && decision.focus.length
+    ? decision.focus.slice(0, 5)
+    : (decision.targets || []).slice(0, 5).map((item) => `${item.symbol}｜${item.grade || '观察'}｜${item.direction || 'WAIT'}｜${item.entryTrigger || '等待确认'}`);
+  const avoid = Array.isArray(decision.avoid) && decision.avoid.length
+    ? decision.avoid.slice(0, 5)
+    : (fallbackPlan.avoid || ['无量高开不追', '跌回 VWAP 下方取消追涨']);
+  return {
+    title: decision.title || decision.actionBias || fallbackPlan.title || '等待确认',
+    body: decision.summary || fallbackPlan.body || '等待开盘量价确认。',
+    focus: focus.length ? focus : (fallbackPlan.focus || ['等待交易决策引擎刷新']),
+    avoid,
+    grade: decision.grade,
+    score: decision.score,
+    permission: decision.permission,
+    probability: decision.probability,
+    checklist: decision.checklist || [],
+    riskControl: decision.riskControl || null,
+    topTarget: decision.topTarget || null
+  };
+}
+
 function buildDashboard(sources) {
   sources = enrichSources(sources);
   const reliability = computeDataReliability(sources);
@@ -770,6 +796,7 @@ function buildDashboard(sources) {
   const retailForScoring = scoreEligible.retail ? retail : {};
   const marketBreadth = sources.marketBreadth?.data || {};
   const decision = sources.decisionEngine?.data || {};
+  const tradeDecision = decision.tradeDecision || sources.tradeDecision?.data || null;
   const strategyFlows = flowsForScoring.length ? flowsForScoring : deriveStrategyFlows(premarketMomentum, stars, marketBreadth);
   const calculatedRisk = indicesForScoring.length
     ? calculateRiskRegime(indicesForScoring, [], {}, {
@@ -802,9 +829,11 @@ function buildDashboard(sources) {
   const watchlistOnly = opportunityBuckets.watchlistOnly;
   const starsWithWatchlist = mergeWatchlistIntoStars(stars, watchlistOnly);
   const generatedTradePlan = buildPremarketTradePlan(opportunities, strategyFlows, risk, optionsForScoring, premarketMomentum);
-  const tradePlan = decision.tradePlan && indicesForScoring.length
-    ? tradePlanFromDecision(decision.tradePlan, decision.watchlist)
-    : generatedTradePlan;
+  const tradePlan = tradeDecision && tradeDecision.focus
+    ? tradePlanFromTradeDecision(tradeDecision, generatedTradePlan)
+    : decision.tradePlan && indicesForScoring.length
+      ? tradePlanFromDecision(decision.tradePlan, decision.watchlist)
+      : generatedTradePlan;
   const [strategy, strategyContext] = decision.strategySummary && indicesForScoring.length
     ? [decision.strategySummary.headline, `${decision.strategySummary.summary} 置信度 ${decision.strategySummary.confidence || "MEDIUM"}。`]
     : strategyFrom(risk, strategyFlows, retailForScoring, optionsForScoring, {
@@ -872,6 +901,7 @@ function buildDashboard(sources) {
     opportunities,
     opportunityWatchlist: watchlistOnly,
     premarketMomentum,
+    tradeDecision,
     tradePlan,
     scannerStatus: buildScannerStatus(opportunities, flows.length ? flows : strategyFlows, risk, premarketMomentum),
     flows,
@@ -1814,11 +1844,12 @@ function renderCommandDeck(dashboard) {
   const tnxChange = Number(byId.TNX?.change || 0);
   const dxyChange = Number(byId.DXY?.change || 0);
   const riskAlert = risk.mode === "Risk-Off" || vixChange > 3 || tnxChange > 1 || dxyChange > 0.4;
-  const action = risk.mode === "Risk-On"
-    ? "回踩做强势"
+  const tradeDecision = dashboard.tradeDecision || {};
+  const action = tradeDecision.actionBias || (risk.mode === "Risk-On"
+    ? "CALL 优先"
     : risk.mode === "Risk-Off"
-      ? "降低追涨"
-      : "等待确认";
+      ? "降风险"
+      : "等待确认");
   text("#deckRiskMode", displayRiskModeHero(risk.mode));
   text("#deckRiskScore", risk.score === null || risk.score === undefined ? `置信度 ${risk.confidence || "低"}` : `Score ${risk.score} · 置信度 ${risk.confidence || "中"}`);
   text("#deckMainTheme", topFlow.sector || "等待确认");
@@ -1828,7 +1859,7 @@ function renderCommandDeck(dashboard) {
   text("#deckRiskAlert", riskAlert ? "风险升温" : "风险可控");
   text("#deckRiskDetail", `VIX ${signed(vixChange)} · 10Y ${signed(tnxChange)} · DXY ${signed(dxyChange)}`);
   text("#deckActionBias", action);
-  text("#deckActionDetail", dashboard.strategy || "等待开盘确认");
+  text("#deckActionDetail", tradeDecision.title ? `${tradeDecision.title} · ${tradeDecision.permission || "等待确认"}` : (dashboard.strategy || "等待开盘确认"));
   const deck = document.querySelector(".command-deck");
   if (deck) {
     deck.dataset.alert = riskAlert ? "on" : "off";
@@ -2390,6 +2421,7 @@ function newsBiasClass(bias) {
 
 function renderProWorkspaces(dashboard) {
   if (!dashboard) return;
+  latestDashboard = dashboard;
   renderIntradayWorkspace(dashboard);
   renderDailyReportWorkspace(dashboard);
   renderNextPlanWorkspace(dashboard);
@@ -2430,67 +2462,104 @@ function proKpiCard(title, value, copy, tone = "") {
 }
 
 function renderDailyReportWorkspace(dashboard) {
-  text("#dailyReportMeta", dashboard.asOf || "最新快照");
+  text("#dailyReportMeta", `${dashboard.asOf || "最新快照"} · 本地结构化解释层`);
+  const localReport = buildLocalDailyReport(dashboard);
+  renderDailyReportPayload(localReport, { source: "local" });
+}
+
+function buildLocalDailyReport(dashboard) {
   const indices = dashboard.indices || [];
   const flows = dashboard.flows || [];
   const movers = dashboard.movers || [];
   const news = dashboard.news || [];
-  const rows = indices.slice(0, 7).map((item) => `<tr><td>${escapeHtml(item.id)}</td><td>${formatNumber(item.value)}</td><td class="${changeClass(item.change, ["VIX","TNX","DXY","GOLD"].includes(item.id))}">${signed(item.change)}</td><td>${escapeHtml(item.note || "")}</td></tr>`).join("");
-  const sectorRows = flows.slice(0, 6).map((item, idx) => `<tr><td>#${idx + 1}</td><td>${escapeHtml(item.sector)}</td><td>${item.score}</td><td class="${item.change >= 0 ? "up" : "down"}">${signed(item.change)}</td></tr>`).join("");
+  const risk = dashboard.risk || {};
+  const summary = `${displayRiskMode(risk.mode)}；主线：${flows[0]?.sector || "等待确认"}；重点观察：${movers.slice(0, 5).map((item) => item.symbol).join(" / ") || "等待异动"}。`;
+  return {
+    title: "AI美股日报｜本地快照版",
+    provider: "local-dashboard",
+    status: "snapshot",
+    summary,
+    marketRegime: { mode: risk.mode || "Neutral", label: displayRiskMode(risk.mode), score: risk.score ?? null },
+    actionBias: dashboard.tradePlan?.title || dashboard.strategy || "等待开盘量价确认",
+    focus: [...(dashboard.opportunities || []), ...(dashboard.movers || [])].slice(0, 6).map((item) => item.symbol).filter(Boolean),
+    avoid: ["无量高开追涨", "VIX反弹时重仓CALL", "指数与个股背离时追单"],
+    sections: [
+      { id: "00", title: "今日一句话总结", body: dashboard.risk?.conclusion || dashboard.marketSummary || "市场等待确认", bullets: [`主线：${flows[0]?.sector || "等待板块确认"}`, `策略：${dashboard.strategy || "等待量价确认"}`] },
+      { id: "01", title: "大盘表现总览", body: indices.slice(0, 7).map((item) => `${item.id}: ${formatNumber(item.value)} ${signed(item.change)}`).join("；") || "暂无可靠指数数据。", bullets: [] },
+      { id: "02", title: "盘中走势复盘", body: dashboard.marketSummary || "宽基指数等待成交确认。", bullets: [`盘前：${dashboard.scannerStatus?.premarketMomentum || "观察"}`, `开盘：${dashboard.scannerStatus?.openingBias || "观察"}`] },
+      { id: "03", title: "宏观环境", body: (dashboard.macro || [])[0]?.summary || "重点观察美债、美元、VIX、黄金与油价。", bullets: [] },
+      { id: "04", title: "板块表现 / 主题风格", body: flows.slice(0, 8).map((item) => `${item.sector} ${item.score}`).join(" / ") || "等待板块热度。", bullets: [] },
+      { id: "05", title: "市场宽度与参与度", body: "当前以板块扩散、异动数量、机会榜数量和相对成交量作为宽度代理。", bullets: [] },
+      { id: "06", title: "技术面分析", body: "确认链：指数方向 → VWAP → 相对成交量 → 板块共振 → 个股新闻催化。", bullets: [] },
+      { id: "07", title: "重点个股新闻与异动", body: movers.slice(0, 6).map((item) => `${item.symbol} ${signed(item.change)}：${item.reason}`).join("；") || "暂无可靠异动。", bullets: [] },
+      { id: "10", title: "机构观点与资金流", body: news.slice(0, 5).map((item) => `${item.ticker}｜${item.title}`).join("；") || "等待新闻源刷新。", bullets: [] },
+      { id: "13", title: "明日交易计划", body: dashboard.tradePlan?.body || "开盘15分钟后确认：QQQ/SPY同向、VIX不反弹、目标股RVOL放大、VWAP回踩承接。", bullets: [] },
+      { id: "14", title: "风险提示", body: "若QQQ跌破开盘区间低点、VIX反弹、10Y/DXY同步上行、AI龙头放量回落，应取消追涨计划。", bullets: [] },
+      { id: "15", title: "最终结论", body: `当前阶段：${displayRiskMode(risk.mode)}。只做确认后的主线顺势机会。`, bullets: [] }
+    ]
+  };
+}
+
+function renderDailyReportPayload(report = {}, options = {}) {
+  const sections = Array.isArray(report.sections) ? report.sections : [];
+  text("#dailyReportMeta", `${report.provider || options.source || "narrative"} · ${report.status || "live"}`);
   html("#dailyReport", `
-    <article class="report-card wide">
-      <p class="panel-label">0. 今日一句话总结</p>
-      <h3>${escapeHtml(dashboard.risk?.conclusion || dashboard.marketSummary || "市场等待确认")}</h3>
-      <p>今日市场状态：${escapeHtml(displayRiskMode(dashboard.risk?.mode))}；主线：${escapeHtml(flows[0]?.sector || "等待板块确认")}；策略：${escapeHtml(dashboard.strategy || "等待量价确认")}。</p>
+    <article class="report-card wide report-hero-summary narrative-hero">
+      <p class="panel-label">AI NARRATIVE ENGINE</p>
+      <h3>${escapeHtml(report.summary || report.title || "等待日报生成")}</h3>
+      <p>${escapeHtml(report.actionBias || "日报会把行情、板块、催化与风险转化为可执行计划。")}</p>
+      <div class="mini-tags">
+        <span>${escapeHtml(report.marketRegime?.label || displayRiskMode(report.marketRegime?.mode) || "市场状态")}</span>
+        ${(report.focus || []).slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+      </div>
     </article>
-    <article class="report-card wide">
-      <h3>1. 大盘表现总览</h3>
-      <table class="report-table"><thead><tr><th>指数</th><th>点位</th><th>涨跌</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
-    </article>
-    <article class="report-card">
-      <h3>2. 盘中走势复盘</h3>
-      <p>${escapeHtml(dashboard.marketSummary || "宽基指数温和修复，等待真实成交确认。")}</p>
-      <div class="mini-tags"><span>盘前：${escapeHtml(dashboard.scannerStatus?.premarketMomentum || "观察")}</span><span>开盘：${escapeHtml(dashboard.scannerStatus?.openingBias || "观察")}</span></div>
-    </article>
-    <article class="report-card">
-      <h3>3. 宏观环境</h3>
-      <p>${escapeHtml((dashboard.macro || [])[0]?.summary || "宏观变量等待更新，重点观察美债、美元、VIX 与油价。")}</p>
-    </article>
-    <article class="report-card wide">
-      <h3>4. 板块表现 / 主题风格</h3>
-      <table class="report-table"><thead><tr><th>排名</th><th>板块</th><th>热度</th><th>涨跌</th></tr></thead><tbody>${sectorRows}</tbody></table>
-    </article>
-    <article class="report-card">
-      <h3>5. 市场宽度与参与度</h3>
-      <p>当前免费版以板块扩散、涨跌异动与相对成交量代理市场宽度。后续可接入 Advance/Decline、52周新高新低、均线参与度等真实宽度源。</p>
-    </article>
-    <article class="report-card">
-      <h3>6. 重点个股新闻与异动</h3>
-      <p>${movers.slice(0,3).map((item) => `${item.symbol} ${signed(item.change)}：${item.reason}`).join("；") || "暂无可靠异动。"}</p>
-    </article>
-    <article class="report-card wide">
-      <h3>7. 机构观点 / 新闻催化</h3>
-      <p>${news.slice(0,4).map((item) => `${item.ticker}｜${item.title}`).join("；") || "等待新闻源刷新。"}</p>
-    </article>
-    <article class="report-card wide">
-      <h3>15. 最终结论</h3>
-      <p>当前阶段：${escapeHtml(displayRiskMode(dashboard.risk?.mode))}。操作倾向：不追无量高开，优先等待 VWAP 回踩、相对成交量放大和板块共振。最重要的 5 个信号：SPY/QQQ 方向、VIX、10Y 美债、最强板块延续性、NVDA/AMD/PLTR 等核心股量能。</p>
-    </article>
+    ${sections.map((section) => `
+      <article class="report-card ${section.id === "00" || section.id === "15" ? "wide" : ""}">
+        <p class="panel-label">${escapeHtml(section.id || "--")}</p>
+        <h3>${escapeHtml(section.title || "未命名章节")}</h3>
+        <p>${escapeHtml(section.body || "等待数据")}</p>
+        ${Array.isArray(section.bullets) && section.bullets.length ? `<div class="mini-tags">${section.bullets.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+      </article>
+    `).join("")}
   `);
+}
+
+async function loadDailyReportFromApi(force = false) {
+  if (dailyReportLoading) return;
+  const url = endpoint("dailyReport");
+  if (!url) return;
+  const now = Date.now();
+  if (!force && dailyReportLoadedAt && now - dailyReportLoadedAt < 180000) return;
+  dailyReportLoading = true;
+  try {
+    text("#dailyReportMeta", "AI日报生成中...");
+    const joiner = url.includes("?") ? "&" : "?";
+    const report = await fetchJson(`${url}${joiner}ts=${Date.now()}`);
+    dailyReportLoadedAt = Date.now();
+    renderDailyReportPayload(report, { source: "api" });
+  } catch (error) {
+    console.warn("daily report fallback", error);
+    if (latestDashboard) renderDailyReportPayload(buildLocalDailyReport(latestDashboard), { source: "local-fallback" });
+  } finally {
+    dailyReportLoading = false;
+  }
 }
 
 function renderNextPlanWorkspace(dashboard) {
   text("#nextPlanMeta", dashboard.asOf || "最新快照");
   const plan = dashboard.tradePlan || { focus: [], avoid: [] };
+  const decision = dashboard.tradeDecision || {};
   const indices = Object.fromEntries((dashboard.indices || []).map((item) => [item.id, item]));
   const watch = [...(dashboard.opportunities || []), ...(dashboard.opportunityWatchlist || [])].filter((item) => item?.symbol && !String(item.symbol).includes("暂无")).slice(0, 8);
+  const targets = Array.isArray(decision.targets) ? decision.targets.slice(0, 5) : [];
+  const checklist = Array.isArray(decision.checklist) ? decision.checklist.slice(0, 5) : [];
   html("#decisionBoard", `
-    <article class="decision-card"><p class="panel-label">核心判断</p><h3>${escapeHtml(plan.title || dashboard.strategy || "等待确认")}</h3><p>${escapeHtml(plan.body || dashboard.strategyContext || "等待行情刷新。")}</p></article>
-    <article class="decision-card"><p class="panel-label">SPY / QQQ 关键区</p><div class="kpi">${escapeHtml(displayRiskModeHero(dashboard.risk?.mode))}</div><p>SPY：${levelText(indices.SPY)}<br>QQQ：${levelText(indices.QQQ)}</p></article>
-    <article class="decision-card"><p class="panel-label">风险事件</p><h3>${escapeHtml((dashboard.macro || [])[0]?.title || "宏观变量")}</h3><p>${escapeHtml((dashboard.macro || [])[0]?.summary || "重点看 10Y、DXY、VIX、油价与财报催化。")}</p></article>
-    <article class="decision-card"><p class="panel-label">优先关注</p>${(plan.focus || []).map((item) => `<p>• ${escapeHtml(item)}</p>`).join("") || "<p>等待机会榜刷新。</p>"}</article>
-    <article class="decision-card"><p class="panel-label">避免</p>${(plan.avoid || []).map((item) => `<p>• ${escapeHtml(item)}</p>`).join("") || "<p>避免无量追高和低质量突破。</p>"}</article>
-    <article class="decision-card"><p class="panel-label">明日观察股</p><p>${watch.map((item) => item.symbol).join(" / ") || "等待观察名单"}</p><div class="mini-tags">${watch.slice(0,6).map((item) => `<span>${escapeHtml(item.symbol)} ${item.score ?? "观察"}</span>`).join("")}</div></article>
+    <article class="decision-card p4-hero-card"><p class="panel-label">P4 交易决策</p><h3>${escapeHtml(decision.title || plan.title || dashboard.strategy || "等待确认")}</h3><p>${escapeHtml(decision.summary || plan.body || dashboard.strategyContext || "等待行情刷新。")}</p><div class="mini-tags"><span>${escapeHtml(decision.permission || "等待确认")}</span><span>${escapeHtml(decision.direction || "WAIT")}</span><span>概率 ${escapeHtml(decision.probability ?? "--")}</span></div></article>
+    <article class="decision-card"><p class="panel-label">SPY / QQQ 关键区</p><div class="kpi">${escapeHtml(decision.grade || displayRiskModeHero(dashboard.risk?.mode))}</div><p>SPY：${levelText(indices.SPY)}<br>QQQ：${levelText(indices.QQQL || indices.QQQ)}</p></article>
+    <article class="decision-card"><p class="panel-label">市场闸门</p><h3>${escapeHtml(decision.marketGate?.permission || decision.permission || "等待确认")}</h3><p>${escapeHtml(decision.marketGate?.reason || "重点看 QQQ / SPY / VIX / Breadth 是否共振。")}</p></article>
+    <article class="decision-card p4-targets"><p class="panel-label">优先目标</p>${targets.length ? targets.map((item) => `<p><b>${escapeHtml(item.symbol)}</b>｜${escapeHtml(item.grade)}｜${escapeHtml(item.direction)}｜${escapeHtml(item.entryTrigger)}</p>`).join("") : (plan.focus || []).map((item) => `<p>• ${escapeHtml(item)}</p>`).join("") || "<p>等待机会榜刷新。</p>"}</article>
+    <article class="decision-card"><p class="panel-label">避免</p>${(decision.avoid || plan.avoid || []).slice(0, 5).map((item) => `<p>• ${escapeHtml(item)}</p>`).join("") || "<p>避免无量高开和低质量突破。</p>"}</article>
+    <article class="decision-card"><p class="panel-label">执行检查</p>${checklist.length ? checklist.map((item) => `<p>${item.pass ? "✓" : "×"} ${escapeHtml(item.label)}：${escapeHtml(item.detail)}</p>`).join("") : `<p>${watch.map((item) => item.symbol).join(" / ") || "等待观察名单"}</p>`}</article>
   `);
 }
 
@@ -2534,7 +2603,10 @@ function initWorkspaceNavigation() {
       const target = tab.dataset.workspaceTarget;
       tabs.forEach((node) => node.classList.toggle("is-active", node === tab));
       views.forEach((view) => view.classList.toggle("is-active", view.dataset.workspace === target));
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (target === "report") loadDailyReportFromApi(false);
+      const selectedView = views.find((view) => view.dataset.workspace === target);
+      if (selectedView) selectedView.scrollIntoView({ behavior: "smooth", block: "start" });
+      else window.scrollTo({ top: 0, behavior: "smooth" });
     });
   });
 }

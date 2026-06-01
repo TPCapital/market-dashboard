@@ -2104,3 +2104,49 @@ body[data-risk="neutral"] .strategy-panel h2 {
 .completion-card strong { color: var(--cyan); font-size: clamp(42px, 4vw, 74px); }
 @media (max-width: 1180px) { .structure-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .structure-grid { grid-template-columns: 1fr; } .structure-card { min-height: auto; } }
+
+/* V6.7 P3 Narrative Engine: report readability and explanation layer */
+.narrative-hero {
+  border-left: 4px solid var(--gold) !important;
+  background: radial-gradient(circle at 0% 0%, rgba(213,173,91,.14), transparent 34%), linear-gradient(180deg, rgba(22,25,32,.985), rgba(7,9,13,.992)) !important;
+}
+.narrative-hero h3 {
+  font-size: clamp(26px, 2.6vw, 48px) !important;
+  line-height: 1.05 !important;
+  letter-spacing: -.055em !important;
+}
+.daily-report-grid .report-card h3 {
+  letter-spacing: -.03em;
+}
+.daily-report-grid .report-card p {
+  line-height: 1.62 !important;
+}
+.daily-report-grid .panel-label {
+  color: var(--gold) !important;
+}
+
+/* === P4 Trade Decision Engine UI === */
+.p4-hero-card {
+  grid-column: span 1;
+  border-left: 4px solid var(--gold) !important;
+  background: radial-gradient(circle at 0% 0%, rgba(213,173,91,.13), transparent 34%), linear-gradient(180deg, rgba(24,26,34,.98), rgba(7,9,13,.99)) !important;
+}
+.p4-hero-card h3 {
+  font-size: clamp(28px, 2.7vw, 48px) !important;
+  line-height: .96 !important;
+  letter-spacing: -.06em !important;
+}
+.p4-hero-card .mini-tags span {
+  border-color: rgba(213,173,91,.24) !important;
+  color: var(--gold) !important;
+}
+.p4-targets p b {
+  color: var(--text);
+  font-size: 16px;
+}
+.decision-card .kpi {
+  color: var(--gold);
+  font-size: clamp(34px, 3vw, 56px);
+  line-height: .9;
+  font-weight: 950;
+}

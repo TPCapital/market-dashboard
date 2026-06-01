@@ -5,7 +5,8 @@ window.DASHBOARD_CONFIG = {
   endpoints: {
     snapshot: "/api/snapshot",
     dailyReport: "/api/daily-report",
-    health: "/api/health"
+    health: "/api/health",
+    tradeDecision: "/api/trade-decision"
   },
 
   marketSymbols: [
