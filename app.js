@@ -28,7 +28,12 @@ const sourceCatalog = {
   reddit: "WallStreetBets Reddit",
   finviz: "Finviz Heatmap",
   unusualWhales: "Options Signal System",
-  benzinga: "Benzinga"
+  benzinga: "Benzinga",
+  marketStructurePro: "Market Structure Pro",
+  yieldCurve: "Yield Curve Pro",
+  oilLayer: "Oil Market Layer",
+  fedWatch: "FedWatch Proxy",
+  breadthPro: "Breadth Pro"
 };
 
 const symbolMeta = {
@@ -448,6 +453,8 @@ async function loadServerSnapshot() {
       fallback: Boolean(json.premarket.momentum.fallback)
     };
   }
+  applyMarketStructureSources(sources, json, marketStatus);
+
   if (strategySummary || marketRegime || tradePlan || tradeDecision || watchlist || json.confidenceScore) {
     const status = normalizeDataQuality(json.sources?.decisionEngine?.status || marketStatus || "delayed");
     const updatedAt = Number(json.generatedAt || Date.now());
@@ -489,6 +496,40 @@ function hasSnapshotData(data) {
   if (Array.isArray(data)) return data.length > 0;
   if (typeof data === "object") return Object.keys(data).length > 0;
   return true;
+}
+
+
+function applyMarketStructureSources(sources, json = {}, marketStatus = "proxy") {
+  const generatedAt = Number(json.generatedAt || Date.now());
+  const root = json.marketStructurePro || json.sources?.marketStructurePro?.data || {};
+  const payloads = {
+    marketStructurePro: root,
+    yieldCurve: json.yieldCurve || root.yieldCurve || json.sources?.yieldCurve?.data || {},
+    oilLayer: json.oil || root.oil || json.sources?.oilLayer?.data || {},
+    fedWatch: json.fedWatch || root.fedWatch || json.sources?.fedWatch?.data || {},
+    breadthPro: json.breadthPro || root.breadthPro || json.sources?.breadthPro?.data || {}
+  };
+  for (const [key, data] of Object.entries(payloads)) {
+    if (!hasSnapshotData(data)) continue;
+    const sourcePayload = json.sources?.[key] || {};
+    const rawStatus = data.status || sourcePayload.status || root.status || marketStatus || "proxy";
+    const status = normalizeDataQuality(rawStatus);
+    const updatedAt = Number(sourcePayload.updatedAt || data.updatedAt || generatedAt || Date.now());
+    sources[key] = {
+      data,
+      status,
+      dataQuality: status,
+      label: sourceCatalog[key],
+      source: data.source || sourcePayload.source || sourceCatalog[key],
+      updatedAt,
+      timestamp: ["live", "delayed", "proxy"].includes(status) ? formatClock(updatedAt) : status === "cached" ? `最后成功 ${formatDateTime(updatedAt)}` : "最近快照",
+      latency: Number.isFinite(Number(sourcePayload.latency)) ? Number(sourcePayload.latency) : null,
+      confidence: data.confidence || sourcePayload.confidence || confidenceLabelByStatus(status),
+      freshness: sourcePayload.freshness || freshnessLabel(updatedAt, status),
+      fallback: ["proxy", "cached", "stale", "snapshot"].includes(status)
+    };
+    writeSourceCache(key, data, updatedAt, status);
+  }
 }
 
 async function refreshSequentially() {
@@ -536,6 +577,11 @@ function fallbackSources() {
     relativeVolume: fallbackSource("relativeVolume", { leaders: [] }),
     premarketMomentum: fallbackSource("premarketMomentum", { leaders: [] }),
     marketBreadth: fallbackSource("marketBreadth", {}),
+    marketStructurePro: fallbackSource("marketStructurePro", {}),
+    yieldCurve: fallbackSource("yieldCurve", {}),
+    oilLayer: fallbackSource("oilLayer", {}),
+    fedWatch: fallbackSource("fedWatch", {}),
+    breadthPro: fallbackSource("breadthPro", {}),
     decisionEngine: fallbackSource("decisionEngine", {}),
     tradeDecision: fallbackSource("tradeDecision", {}),
     tradingView: fallbackSource("tradingView", fallback.tradingView),
@@ -893,7 +939,13 @@ function buildDashboard(sources) {
       source: sourceBasis
     },
     indices: marketIndices,
-    marketStructurePro: sources.marketStructurePro?.data || {},
+    marketStructurePro: sources.marketStructurePro?.data || {
+      sectorRotation: sources.marketStructurePro?.data?.sectorRotation || {},
+      yieldCurve: sources.yieldCurve?.data || {},
+      oil: sources.oilLayer?.data || {},
+      fedWatch: sources.fedWatch?.data || {},
+      breadthPro: sources.breadthPro?.data || {}
+    },
     sentiment: sources.sentiment,
     macro: sources.xMacro.data,
     retail,

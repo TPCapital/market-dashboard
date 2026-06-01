@@ -2480,6 +2480,9 @@ export async function buildSnapshot(req) {
     console.error("[SNAPSHOT ENGINE ERROR] marketStructurePro", error?.message || error);
     marketStructureProData = { status: "unavailable", source: "Market Structure Pro", error: error?.message || "source_failed" };
   }
+  if (marketStructureProData && typeof marketStructureProData === "object") {
+    delete marketStructureProData.completion;
+  }
   const marketStructureProSource = stableModuleSource("marketStructurePro", source("marketStructurePro", marketStructureProData, marketStructureProData.status || "delayed", generatedAt, "Market Structure Pro", {
     confidence: marketStructureProData.confidence || "MEDIUM",
     error: marketStructureProData.error || null,
@@ -2665,7 +2668,7 @@ export async function buildSnapshot(req) {
       tradePlan,
       watchlist,
       signalEngine,
-      marketStructurePro: marketStructureProSource.data || marketStructureProData || {},
+      marketStructurePro: stripInternalMarketStructure(marketStructureProSource.data || marketStructureProData || {}),
       marketBreadth: marketBreadthLayer.data || marketBreadthData || {},
       premarketMomentum: premarketMomentumLayer.data || premarketMomentumData || {},
       relativeVolume: relativeVolumeLayer.data || {},
@@ -2722,7 +2725,7 @@ export async function buildSnapshot(req) {
     },
     indices: normalizedMarketDataSource.data?.indices || normalizedMarketDataSource.indices || [],
     breadth: marketBreadthLayer.data || marketBreadthData || {},
-    marketStructurePro: marketStructureProSource.data || marketStructureProData || {},
+    marketStructurePro: stripInternalMarketStructure(marketStructureProSource.data || marketStructureProData || {}),
     yieldCurve: marketStructureProData.yieldCurve || {},
     oil: marketStructureProData.oil || {},
     fedWatch: marketStructureProData.fedWatch || {},
