@@ -235,3 +235,79 @@ ALPHAVANTAGE_API_KEY
 应返回中文结构化日报 JSON。
 
 > 注意：当前期权信号仍为 Proxy，不是真实 Sweep / Block Trade。日报引擎会基于已有快照做解释，不会伪造缺失数据。
+
+## V6.4 P1 Fast Snapshot Upgrade
+
+本版完成 P1：`buildSnapshot` 快慢路径重构，目标是降低 Vercel Hobby 10 秒超时风险。
+
+### 默认模式：Fast Path
+
+普通页面请求：
+
+```txt
+/api/snapshot
+```
+
+会默认进入 `runtimeMode: "fast"`。
+
+Fast Path 只优先等待：
+
+- Upstash lastKnownGood cache hydration
+- Finnhub strict probe（并发请求，2.5s timeout）
+- TwelveData market data
+- TradingView screener
+- marketData merge
+- 本地派生引擎：sectorHeat / premarketMomentum / optionsProxy / breadth / decisionEngine
+
+非关键外部源优先从 Upstash cache 读取，不再每次阻塞：
+
+- Reddit
+- Benzinga
+- Finnhub News
+- MarketWatch RSS
+- Reuters RSS
+- SEC Feed
+- Insider
+- Earnings
+- FRED
+- AlphaVantage
+
+这样即使这些慢源失败，也不会拖垮首页。
+
+### 深度模式：Deep Refresh
+
+如需手动完整刷新慢源，可打开：
+
+```txt
+/api/snapshot?mode=deep
+```
+
+或：
+
+```txt
+/api/snapshot?deep=1
+```
+
+Deep 模式会尝试更多外部源，适合手动刷新缓存，不建议作为前端默认刷新。
+
+### 验证
+
+打开 `/api/snapshot` 后搜索：
+
+```json
+"runtimeMode":"fast"
+```
+
+打开 `/api/snapshot?mode=deep` 后搜索：
+
+```json
+"runtimeMode":"deep"
+```
+
+同时确认：
+
+```json
+"cacheWriteStatus": { "adapter": "upstash" }
+```
+
+说明 P0 + P1 都生效。

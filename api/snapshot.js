@@ -173,9 +173,25 @@ const lastGoodFinnhubQuotes = new Map();
 const lastGoodTwelveDataQuotes = new Map();
 const SOURCE_DEBUG_PREFIX = "[snapshot:debug]";
 const LAST_KNOWN_GOOD_TTL_MS = 6 * 60 * 60 * 1000;
-const SOURCE_MANAGER_TIMEOUT_MS = 4200;
-const CRITICAL_SOURCE_TIMEOUT_MS = 5200;
+const SOURCE_MANAGER_TIMEOUT_MS = 2800;
+const CRITICAL_SOURCE_TIMEOUT_MS = 3600;
 const CRITICAL_SOURCES = new Set(["twelveData", "tradingView", "marketData"]);
+const CACHE_FIRST_SOURCES = new Set([
+  "finnhubInsider",
+  "finnhubEarnings",
+  "alphavantage",
+  "fred",
+  "earnings",
+  "insider",
+  "reddit",
+  "benzinga",
+  "finnhubNews",
+  "marketWatchNews",
+  "reutersNews",
+  "secNews"
+]);
+let snapshotRuntimeMode = "fast";
+let snapshotRuntimeStartedAt = 0;
 const LAST_KNOWN_GOOD_KEY = "market-dashboard:lastKnownGood";
 const SOURCE_PLANS = {
   marketData: { primary: "Finnhub quotes", backups: ["TwelveData", "TradingView Screener", "AlphaVantage / Stooq", "lastKnownGood cache"] },
@@ -514,6 +530,28 @@ function lastOrFallback(key, fallbackData = null) {
 
 async function settleSource(key, loader, generatedAt, fallbackData = null, label) {
   const plan = sourcePlanFor(key);
+  const runtimeAge = snapshotRuntimeStartedAt ? Date.now() - snapshotRuntimeStartedAt : 0;
+  if (snapshotRuntimeMode === "fast" && CACHE_FIRST_SOURCES.has(key)) {
+    if (lastGoodSources[key]) {
+      const cached = cachedSource(key, lastGoodSources[key]);
+      cached.fastPath = true;
+      cached.cachePolicy = { ...(cached.cachePolicy || {}), mode: "cache-first", reason: "vercel_hobby_fast_path" };
+      return cached;
+    }
+    const fallback = fallbackSource(key, fallbackData);
+    fallback.fastPath = true;
+    fallback.error = "skipped_in_fast_path";
+    fallback.sourcePlan = plan;
+    fallback.primarySource = plan.primary;
+    fallback.backupSources = plan.backups;
+    return fallback;
+  }
+  if (snapshotRuntimeMode === "fast" && runtimeAge > 7600 && !CRITICAL_SOURCES.has(key)) {
+    if (lastGoodSources[key]) return cachedSource(key, lastGoodSources[key]);
+    const fallback = fallbackSource(key, fallbackData);
+    fallback.error = "time_budget_exceeded";
+    return fallback;
+  }
   const maxAttempts = 1;
   const timeoutMs = CRITICAL_SOURCES.has(key) ? CRITICAL_SOURCE_TIMEOUT_MS : SOURCE_MANAGER_TIMEOUT_MS;
   let lastError = null;
@@ -1041,16 +1079,14 @@ async function loadFinnhubStrictProbe() {
     };
   }
 
-  const quotes = [];
   let finalError = "";
-  for (const symbol of testSymbols) {
+  const rows = await Promise.all(testSymbols.map(async (symbol) => {
     const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`;
     const safeUrl = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=***`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const timeout = setTimeout(() => controller.abort(), 2500);
     try {
-      console.log("FINNHUB_TEST_SYMBOL:", symbol);
-      console.log("FINNHUB_REQUEST_URL:", safeUrl);
+      const startedAt = Date.now();
       const response = await fetch(url, {
         method: "GET",
         cache: "no-store",
@@ -1061,47 +1097,31 @@ async function loadFinnhubStrictProbe() {
         }
       });
       const bodyText = await response.text();
-      console.log("FINNHUB_RESPONSE_STATUS:", response.status);
-      console.log("FINNHUB_RESPONSE_BODY:", String(bodyText || "").slice(0, 300));
+      console.log("FINNHUB_TEST_RESULT:", { symbol, endpoint: safeUrl, status: response.status, latencyMs: Date.now() - startedAt, body: String(bodyText || "").slice(0, 120) });
       if (!response.ok) {
         if (response.status === 401) finalError = "401_invalid_key";
         else if (response.status === 403) finalError = "403_forbidden";
         else if (response.status === 429) finalError = "429_rate_limit";
         else finalError = `http_${response.status}`;
-        console.error("FINNHUB_ERROR:", finalError);
-        continue;
+        return null;
       }
       let payload = null;
-      try {
-        payload = bodyText ? JSON.parse(bodyText) : null;
-      } catch {
-        finalError = "invalid_response";
-        console.error("FINNHUB_ERROR:", finalError);
-        continue;
-      }
-      if (payload?.error) {
-        const msg = String(payload.error || "").toLowerCase();
-        if (msg.includes("invalid api key")) finalError = "401_invalid_key";
-        else finalError = "invalid_response";
-        console.error("FINNHUB_ERROR:", finalError);
-        continue;
-      }
+      try { payload = bodyText ? JSON.parse(bodyText) : null; } catch { finalError = "invalid_response"; return null; }
+      if (payload?.error) { finalError = String(payload.error || "invalid_response"); return null; }
       const normalized = normalizeProviderQuote(symbol, payload, "Finnhub", "LIVE");
-      if (!normalized) {
-        finalError = "invalid_response";
-        console.error("FINNHUB_ERROR:", finalError);
-        continue;
-      }
-      quotes.push(normalized);
+      if (!normalized) finalError = "invalid_response";
+      return normalized;
     } catch (error) {
       const msg = String(error?.message || "");
       finalError = msg.toLowerCase().includes("aborted") ? "timeout" : "invalid_response";
-      console.error("FINNHUB_ERROR:", msg);
+      console.error("FINNHUB_ERROR:", { symbol, reason: msg });
+      return null;
     } finally {
       clearTimeout(timeout);
     }
-  }
+  }));
 
+  const quotes = rows.filter(Boolean);
   if (quotes.length) {
     return {
       status: "live",
@@ -1109,7 +1129,7 @@ async function loadFinnhubStrictProbe() {
       error: null,
       testSymbols,
       quotes,
-      confidence: "HIGH",
+      confidence: quotes.length >= 3 ? "HIGH" : "MEDIUM",
       fallback: false,
       participatesInScoring: true
     };
@@ -1361,10 +1381,15 @@ async function loadMarketData(rawSymbols, providerRows = {}) {
     alphaMacroMap: new Map(alphaMacroMarketRows(providerRows.alphaMacro || null).map((item) => [item.symbol, item])),
     tradingViewMap: new Map((providerRows.tradingView || []).map((item) => [item.symbol, normalizeTradingViewQuote(item)]).filter(([, row]) => row))
   };
-  const [fallbackMarketRows, fallbackStockRows] = await Promise.all([
-    Promise.all(marketEntries.map(async ([id]) => [id, await fetchIndexWithFallback(id, indexRouteContext)])),
-    Promise.all(quoteSymbols.map((symbol) => fetchWithFallback(symbol).then((row) => [symbol, row]).catch(() => [symbol, null])))
-  ]);
+  const [fallbackMarketRows, fallbackStockRows] = snapshotRuntimeMode === "fast"
+    ? await Promise.all([
+        Promise.all(marketEntries.map(async ([id]) => [id, await fetchIndexWithFallback(id, indexRouteContext)])),
+        Promise.resolve(quoteSymbols.map((symbol) => [symbol, null]))
+      ])
+    : await Promise.all([
+        Promise.all(marketEntries.map(async ([id]) => [id, await fetchIndexWithFallback(id, indexRouteContext)])),
+        Promise.all(quoteSymbols.map((symbol) => fetchWithFallback(symbol).then((row) => [symbol, row]).catch(() => [symbol, null])))
+      ]);
   const fallbackMarketMap = new Map(fallbackMarketRows.map(([id, row]) => [id, row]));
   const fallbackStockMap = new Map(fallbackStockRows.map(([symbol, row]) => [symbol, row]));
   const merged = mergeMarketQuotes({
@@ -1401,7 +1426,7 @@ async function loadMarketData(rawSymbols, providerRows = {}) {
 
 async function loadTradingView() {
   const payload = await fetchJson("https://scanner.tradingview.com/america/scan", {
-    timeoutMs: 10000,
+    timeoutMs: 3200,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1422,7 +1447,7 @@ async function loadTradingView() {
 
 async function loadReddit() {
   const payload = await fetchJson("https://www.reddit.com/r/wallstreetbets/hot.json?limit=50", {
-    timeoutMs: 10000,
+    timeoutMs: 2800,
     headers: { "User-Agent": "InstitutionalDashboard/1.0" }
   });
   const posts = payload.data?.children?.map((item) => item.data) || [];
@@ -2262,7 +2287,10 @@ function calculateRiskRegime(indices) {
 
 export async function buildSnapshot(req) {
   const generatedAt = Date.now();
-  await hydratePersistentCache();
+  snapshotRuntimeStartedAt = generatedAt;
+  const modeParam = String(req?.query?.mode || req?.query?.deep || "").toLowerCase();
+  snapshotRuntimeMode = modeParam === "deep" || modeParam === "1" || modeParam === "true" ? "deep" : "fast";
+  const persistentSnapshot = await hydratePersistentCache();
   console.log(`${SOURCE_DEBUG_PREFIX} ENV CHECK`, {
     FINNHUB_API_KEY: !!envValue("FINNHUB_API_KEY"),
     TWELVEDATA_API_KEY: !!envValue("TWELVEDATA_API_KEY"),
@@ -2565,10 +2593,12 @@ export async function buildSnapshot(req) {
 
   const snapshot = {
     generatedAt,
+    runtimeMode: snapshotRuntimeMode,
+    runtimeBudgetMs: snapshotRuntimeMode === "fast" ? 9000 : 25000,
     envDebug: envDebug(),
     lastKnownGood: {
       adapter: cacheAdapter.type,
-      generatedAt: lastGoodSnapshot?.generatedAt || null,
+      generatedAt: lastGoodSnapshot?.generatedAt || persistentSnapshot?.generatedAt || null,
       marketData: lastGoodSnapshot?.marketData || null,
       indices: lastGoodIndices(),
       quotes: lastGoodQuotes(),
