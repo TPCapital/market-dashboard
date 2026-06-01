@@ -1877,6 +1877,7 @@ function renderModuleStatus(statusMap) {
     star: ["#starModuleMeta"],
     opportunity: ["#opportunityModuleMeta"],
     momentum: ["#momentumModuleMeta"],
+    marketStructure: ["#marketStructureModuleMeta"],
     tradePlan: ["#tradePlanModuleMeta"],
     news: ["#newsModuleMeta"],
     macro: ["#macroModuleMeta"],
@@ -2108,47 +2109,94 @@ function renderRiskInputs(risk) {
 }
 
 
-function renderMarketStructurePro(data = {}) {
+function renderMarketStructurePro(rawData = {}) {
+  const data = rawData?.data && rawData.data.sectorRotation ? rawData.data : rawData;
   const sectorRotation = data.sectorRotation || {};
-  const yieldCurve = data.yieldCurve || {};
-  const oil = data.oil || {};
+  const yieldCurve = data.yieldCurve || data.yield || {};
+  const oil = data.oil || data.oilLayer || {};
   const fedWatch = data.fedWatch || {};
-  const breadthPro = data.breadthPro || {};
-  const completion = data.completion || {};
-  const topSector = sectorRotation.strongestSectors?.[0];
-  const weakSector = sectorRotation.weakestSectors?.[0];
-  const oilRows = oil.rows || [];
-  const sectorRows = sectorRotation.rows || [];
+  const breadthPro = data.breadthPro || data.breadth || {};
+  const topSector = (sectorRotation.strongestSectors || sectorRotation.leaders || sectorRotation.rows || [])[0];
+  const weakSector = (sectorRotation.weakestSectors || []).find(Boolean) || [...(sectorRotation.rows || [])].sort((a, b) => Number(a.score || 0) - Number(b.score || 0))[0];
+  const oilRows = Array.isArray(oil.rows) ? oil.rows : [];
+  const sectorScore = Number(sectorRotation.rotationScore ?? topSector?.score ?? 50);
+  const yieldScore = Number.isFinite(Number(yieldCurve.dgs10)) ? (yieldCurve.confidence === "HIGH" ? 88 : yieldCurve.confidence === "MEDIUM" ? 68 : 58) : 45;
+  const oilScore = Number.isFinite(Number(oil.avgChange)) ? Math.round(50 + Math.min(25, Math.abs(Number(oil.avgChange)) * 7)) : 45;
+  const fedScore = Number.isFinite(Number(fedWatch.nearCutProbability)) ? Number(fedWatch.nearCutProbability) : 45;
+  const breadthScore = Number.isFinite(Number(breadthPro.breadthScore)) ? Number(breadthPro.breadthScore) : 45;
+
+  const sectorValue = topSector
+    ? `${topSector.sector || topSector.symbol} ${Math.round(topSector.score ?? sectorScore)}`
+    : "结构参考";
+  const yieldValue = Number.isFinite(Number(yieldCurve.dgs10))
+    ? `${formatNumber(yieldCurve.dgs10)}% · ${displayStructureState(yieldCurve.curveState)}`
+    : "部分数据";
+  const oilValue = oilRows.length
+    ? `${formatNumber(oilRows[0]?.price)} · ${signed(oil.avgChange ?? oilRows[0]?.changePercent ?? 0)}`
+    : "结构参考";
+  const fedValue = Number.isFinite(Number(fedWatch.nearCutProbability))
+    ? `${Math.round(Number(fedWatch.nearCutProbability))}%`
+    : "代理观察";
+  const breadthValue = Number.isFinite(Number(breadthPro.breadthScore))
+    ? `${Math.round(Number(breadthPro.breadthScore))}`
+    : "代理观察";
+
   const htmlParts = [
-    structureCard("板块轮动", topSector ? `${topSector.sector} ${Math.round(topSector.score)}` : "等待", sectorRotation.explanation || "等待板块 ETF 刷新", [
-      `最强：${topSector?.symbol || "--"}`,
-      `最弱：${weakSector?.symbol || "--"}`,
-      `状态：${displayStructureState(sectorRotation.rotationType)}`
-    ], sectorRotation.rotationScore, "sector"),
-    structureCard("收益率曲线", yieldCurve.curveState ? displayStructureState(yieldCurve.curveState) : "等待", yieldCurve.explanation || "等待 2Y/10Y/30Y 数据", [
-      `2Y ${yieldCurve.dgs2 ?? "--"}`,
-      `10Y ${yieldCurve.dgs10 ?? "--"}`,
-      `30Y ${yieldCurve.dgs30 ?? "--"}`,
-      `2Y-10Y ${yieldCurve.twoTen ?? "--"}`
-    ], yieldCurve.confidence === "HIGH" ? 88 : yieldCurve.confidence === "MEDIUM" ? 68 : 45, "yield"),
-    structureCard("原油 / 通胀", oil.inflationPressure ? displayStructureState(oil.inflationPressure) : "等待", oil.explanation || "等待 WTI / Brent 数据", oilRows.map((row) => `${row.name || row.symbol} ${formatNumber(row.price)} ${signed(row.changePercent)}`), oil.confidence === "MEDIUM" ? 66 : 45, "oil"),
-    structureCard("FedWatch", `${fedWatch.nearCutProbability ?? "--"}%`, fedWatch.explanation || "等待降息预期代理", [
-      `近月降息概率 ${fedWatch.nearCutProbability ?? "--"}%`,
+    structureCard("板块轮动", sectorValue, sectorRotation.explanation || "板块 ETF 已接入，当前以可用数据与代理快照判断轮动。", [
+      `最强：${topSector?.symbol || "--"}${topSector?.sector ? ` ${topSector.sector}` : ""}`,
+      `最弱：${weakSector?.symbol || "--"}${weakSector?.sector ? ` ${weakSector.sector}` : ""}`,
+      `状态：${displayStructureState(sectorRotation.rotationType)}`,
+      dataQualityTag(sectorRotation)
+    ], sectorScore, "sector"),
+    structureCard("收益率曲线", yieldValue, yieldCurve.explanation || "显示可用的 2Y / 10Y / 30Y 与 Fed Funds 数据；缺失项以结构参考处理。", [
+      `2Y ${formatNullablePercent(yieldCurve.dgs2)}`,
+      `10Y ${formatNullablePercent(yieldCurve.dgs10)}`,
+      `30Y ${formatNullablePercent(yieldCurve.dgs30)}`,
+      `Fed ${formatNullablePercent(yieldCurve.fedFunds)}`,
+      `2Y-10Y ${formatNullablePercent(yieldCurve.twoTen)}`,
+      dataQualityTag(yieldCurve)
+    ], yieldScore, "yield"),
+    structureCard("原油 / 通胀", oilValue, oil.explanation || "WTI / Brent 用于观察通胀压力与能源板块催化。", [
+      ...oilRows.slice(0, 2).map((row) => `${row.name || row.symbol} ${formatNumber(row.price)} ${signed(row.changePercent)}`),
+      `状态：${displayStructureState(oil.inflationPressure)}`,
+      dataQualityTag(oil)
+    ], oilScore, "oil"),
+    structureCard("FedWatch", fedValue, fedWatch.explanation || "免费版使用收益率曲线、油价与风险偏好生成降息概率代理。", [
+      `近月降息概率 ${formatNullablePercent(fedWatch.nearCutProbability, 0)}`,
       `年内降息 ${fedWatch.yearEndCuts ?? "--"} 次`,
-      displayStructureState(fedWatch.impliedPath)
-    ], fedWatch.confidence === "MEDIUM" ? 62 : 45, "fed"),
-    structureCard("市场宽度", breadthPro.breadthScore ?? "--", breadthPro.explanation || "等待宽度数据", [
-      `>20MA ${breadthPro.percentAbove20 ?? "--"}%`,
-      `>50MA ${breadthPro.percentAbove50 ?? "--"}%`,
-      `>200MA ${breadthPro.percentAbove200 ?? "--"}%`,
-      displayStructureState(breadthPro.health)
-    ], breadthPro.breadthScore, "breadth")
+      displayStructureState(fedWatch.impliedPath),
+      dataQualityTag(fedWatch)
+    ], fedScore, "fed"),
+    structureCard("市场宽度", breadthValue, breadthPro.explanation || "免费版用股票池、板块轮动与动量代理全市场宽度。", [
+      `>20MA ${formatNullablePercent(breadthPro.percentAbove20, 0)}`,
+      `>50MA ${formatNullablePercent(breadthPro.percentAbove50, 0)}`,
+      `>200MA ${formatNullablePercent(breadthPro.percentAbove200, 0)}`,
+      `参与度 ${formatNullablePercent(breadthPro.participation, 0)}`,
+      displayStructureState(breadthPro.health),
+      dataQualityTag(breadthPro)
+    ], breadthScore, "breadth")
   ];
   html("#marketStructureGrid", htmlParts.join(""));
 }
 
+function dataQualityTag(obj = {}) {
+  const q = normalizeDataQuality(obj.dataQuality || obj.status || obj.confidence);
+  if (q === "live") return "实时";
+  if (q === "delayed") return "最新";
+  if (q === "cached" || q === "snapshot") return "缓存";
+  if (q === "stale") return "最近有效";
+  if (q === "proxy") return "代理";
+  return obj.confidence ? `置信度 ${obj.confidence}` : "结构参考";
+}
+
+function formatNullablePercent(value, digits = 2) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `${n.toFixed(digits)}%` : "--";
+}
+
 function structureCard(title, value, copy, tags = [], score = 50, type = "") {
-  const tone = Number(score) >= 70 ? "hot" : Number(score) <= 42 ? "risk" : "watch";
+  const numeric = Number(score);
+  const tone = numeric >= 62 ? "hot" : numeric <= 42 ? "risk" : "watch";
   return `<article class="structure-card ${tone} structure-${escapeHtml(type)}">
     <p class="panel-label">${escapeHtml(title)}</p>
     <strong>${escapeHtml(value)}</strong>

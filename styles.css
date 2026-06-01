@@ -2234,3 +2234,111 @@ body[data-risk="neutral"] .strategy-panel h2 {
   color: var(--soft) !important;
 }
 .mention-grid b { color: var(--gold) !important; }
+
+/* === V6.10 UI Consumption Fix ===
+   Consume existing P2 data instead of showing waiting cards, keep internal progress hidden,
+   and prevent pale card background leakage in trade plan / WSB. */
+#marketStructureModuleMeta.module-proxy,
+#marketStructureModuleMeta.module-cached,
+#marketStructureModuleMeta.module-delayed,
+#marketStructureModuleMeta.module-live {
+  color: var(--cyan) !important;
+  border-color: rgba(89,215,232,.32) !important;
+  background: rgba(89,215,232,.08) !important;
+}
+.structure-grid {
+  grid-template-columns: repeat(5, minmax(220px, 1fr)) !important;
+  gap: 14px !important;
+}
+.structure-card {
+  min-height: 214px !important;
+  padding: 20px !important;
+  border-radius: 18px !important;
+  background: radial-gradient(circle at 0% 0%, rgba(213,173,91,.10), transparent 34%), linear-gradient(180deg, rgba(22,25,32,.985), rgba(7,9,13,.992)) !important;
+  border: 1px solid rgba(255,255,255,.13) !important;
+  border-left: 4px solid var(--gold) !important;
+  color: var(--text) !important;
+  box-shadow: 0 22px 80px rgba(0,0,0,.46) !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.structure-card.hot { border-left-color: var(--green) !important; }
+.structure-card.risk { border-left-color: var(--red) !important; }
+.structure-card.watch { border-left-color: var(--gold) !important; }
+.structure-card::before,
+.structure-card::after { display: none !important; content: none !important; }
+.structure-card .panel-label { color: var(--muted) !important; font-size: 12px !important; }
+.structure-card strong {
+  color: var(--text) !important;
+  font-size: clamp(30px, 2.6vw, 52px) !important;
+  line-height: .92 !important;
+  letter-spacing: -.06em !important;
+  word-break: keep-all !important;
+}
+.structure-card.hot strong { color: var(--green) !important; }
+.structure-card.risk strong { color: var(--red) !important; }
+.structure-card.watch strong { color: var(--gold) !important; }
+.structure-card p { color: var(--soft) !important; font-size: 14px !important; line-height: 1.48 !important; }
+.structure-tags { margin-top: auto !important; display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
+.structure-tags span {
+  border: 1px solid rgba(255,255,255,.12) !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,.045) !important;
+  color: var(--soft) !important;
+  padding: 6px 9px !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}
+
+/* Hide all engineering completion / progress cards from user-facing system. */
+.completion-card,
+.structure-card.completion-card,
+[data-module="completion"],
+#completionCard,
+#p2Completion,
+.p2-completion-card,
+[data-internal-progress="true"] {
+  display: none !important;
+}
+
+/* Trade plan: force every nested box to dark terminal style. */
+.trade-plan-card,
+.trade-plan-card .plan-list div,
+.plan-list div,
+#tradePlanList div,
+#v6TradePlaybook .playbook-card,
+.playbook-card,
+.decision-card {
+  background: radial-gradient(circle at 0% 0%, rgba(89,215,232,.08), transparent 34%), linear-gradient(180deg, rgba(22,25,32,.985), rgba(7,9,13,.992)) !important;
+  color: var(--text) !important;
+  border-color: rgba(255,255,255,.13) !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
+.trade-plan-card .plan-list div:first-child,
+#tradePlanList div:first-child { border-left: 3px solid var(--green) !important; }
+.trade-plan-card .plan-list div:last-child,
+#tradePlanList div:last-child { border-left: 3px solid var(--red) !important; }
+.trade-plan-card .plan-list span,
+#tradePlanList span { color: var(--gold) !important; }
+.trade-plan-card .plan-list p,
+#tradePlanList p { color: var(--soft) !important; font-size: 14px !important; line-height: 1.55 !important; }
+
+/* WSB / Retail: never show unavailable as an empty panel; proxy remains visually valid. */
+#retailPanel,
+#retailPanel .sentiment-gauge-card,
+.sentiment-gauge-card,
+.mention-grid span {
+  background: radial-gradient(circle at 0% 0%, rgba(89,215,232,.10), transparent 34%), linear-gradient(180deg, rgba(22,25,32,.985), rgba(7,9,13,.992)) !important;
+  color: var(--text) !important;
+  border-color: rgba(255,255,255,.13) !important;
+  opacity: 1 !important;
+}
+#retailPanel .dial-copy strong { color: var(--text) !important; }
+#retailPanel .dial-copy p,
+#retailPanel .retail-note,
+#retailPanel .dial-scale { color: var(--soft) !important; }
+#retailPanel .mention-grid b { color: var(--gold) !important; }
+
+@media (max-width: 1500px) { .structure-grid { grid-template-columns: repeat(3, minmax(220px, 1fr)) !important; } }
+@media (max-width: 980px) { .structure-grid { grid-template-columns: 1fr !important; } }
