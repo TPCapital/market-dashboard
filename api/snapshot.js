@@ -1641,19 +1641,34 @@ async function loadMarketWatchNews() {
 }
 
 async function loadReutersNews() {
-  try {
-    const rss = await fetchText("https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best");
-    const items = normalizeNewsFeed(parseRssItems(rss, "Reuters"), "Reuters");
-    if (!items.length) return { data: [], status: "unavailable", label: "Reuters", error: "no_realtime_news" };
-    return { data: items, status: "delayed", label: "Reuters", error: null, fallback: false, confidence: "MEDIUM" };
-  } catch (error) {
-    return { data: [], status: "unavailable", label: "Reuters", error: error.message || "no_realtime_news", fallback: true, confidence: "LOW" };
+  // reutersagency.com feed was retired (404). Use Yahoo Finance + CNBC market RSS
+  // as resilient business-news substitutes; first feed that returns items wins.
+  const feeds = [
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+    "https://www.investing.com/rss/news_25.rss"
+  ];
+  for (const url of feeds) {
+    try {
+      const rss = await fetchText(url);
+      const items = normalizeNewsFeed(parseRssItems(rss, "Reuters/Markets"), "Reuters/Markets");
+      if (items.length) {
+        return { data: items, status: "delayed", label: "Reuters/Markets", error: null, fallback: false, confidence: "MEDIUM" };
+      }
+    } catch (error) {
+      console.error("[news] markets feed failed", { url, reason: error?.message || error });
+    }
   }
+  return { data: [], status: "unavailable", label: "Reuters/Markets", error: "no_realtime_news", fallback: true, confidence: "LOW" };
 }
 
 async function loadSecFilingsNews() {
   try {
-    const atom = await fetchText("https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-k&owner=include&count=40&output=atom");
+    const atom = await fetchText("https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-k&owner=include&count=40&output=atom", {
+      // SEC EDGAR rejects generic agents (403). It requires a descriptive UA with contact info.
+      "User-Agent": "AI Equity Flow Dashboard admin@example.com",
+      Accept: "application/atom+xml,application/xml,text/xml,*/*"
+    });
     const items = normalizeNewsFeed(parseRssItems(atom, "SEC Filing"), "SEC Filing");
     if (!items.length) return { data: [], status: "unavailable", label: "SEC Filing", error: "no_realtime_news" };
     return { data: items, status: "delayed", label: "SEC Filing", error: null, fallback: false, confidence: "MEDIUM" };
@@ -1798,10 +1813,10 @@ async function loadFredMacro() {
     : { data: [], status: "delayed", label: "FRED", error: "FRED unavailable", latency: Date.now() - startedAt, confidence: "LOW", fallback: true };
 }
 
-async function fetchText(url) {
+async function fetchText(url, extraHeaders = {}) {
   const response = await fetch(url, {
     cache: "no-store",
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; Institutional-Terminal/1.0)", Accept: "application/rss+xml,text/xml,text/plain,*/*" }
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; Institutional-Terminal/1.0)", Accept: "application/rss+xml,text/xml,text/plain,*/*", ...extraHeaders }
   });
   if (!response.ok) throw new Error(`upstream ${response.status}`);
   return response.text();
@@ -1809,6 +1824,15 @@ async function fetchText(url) {
 
 function stripXml(value) {
   return String(value).replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").trim();
+}
+
+// Removes internal build-progress metadata (e.g. `completion`) from the
+// Market Structure Pro payload before it is exposed in the public snapshot.
+// Returns a safe, shallow-cloned object; never throws on malformed input.
+function stripInternalMarketStructure(structure) {
+  if (!structure || typeof structure !== "object") return {};
+  const { completion, ...publicFields } = structure;
+  return publicFields;
 }
 
 function analyzeNews(news) {

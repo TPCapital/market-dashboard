@@ -1,71 +1,29 @@
-import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
-import { buildSnapshot } from "../api/snapshot.js";
+# v6.12 → v6.13 修复日志
 
-const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-const port = Number(process.env.PORT || 4173);
+## 🔴 关键致命 bug（导致数据永远滞后的根本原因）
 
-const mime = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".svg": "image/svg+xml"
-};
+**`stripInternalMarketStructure is not defined`**
 
-function sendJson(res, status, payload) {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
-  });
-  res.end(JSON.stringify(payload));
-}
+- `api/snapshot.js` 在第 2671、2728 行调用了 `stripInternalMarketStructure()`，但该函数**从未定义**。
+- 这是一个运行时 `ReferenceError`，发生在 marketData 已组装完成、快照即将返回之前。
+- 后果：**每一次实时构建都崩溃**，`handler` 捕获异常后回退到 Upstash 缓存（`servedFrom: "last-known-good"`），所以你看到的永远是上一次成功写入的旧数据 → 数据滞后 / 无法刷新。
+- 同时 `api/daily-report.js` 直接调用 `buildSnapshot()`，也被同一个 bug 拖垮。
 
-async function handleApi(req, res, url) {
-  try {
-    if (url.pathname === "/api/snapshot") {
-      return sendJson(res, 200, await buildSnapshot({ query: Object.fromEntries(url.searchParams.entries()) }));
-    }
+**修复**：在 `stripXml` 之后补上函数定义，剥离内部构建进度元数据（`completion`），返回浅拷贝且永不抛错。
 
-    if (url.pathname.startsWith("/api/")) {
-      return sendJson(res, 501, { error: "Adapter not configured; frontend fallback will be used." });
-    }
-  } catch (error) {
-    return sendJson(res, 502, { error: "Upstream unavailable", detail: error.message });
-  }
+验证：在断网沙箱中 `buildSnapshot()` 现在返回 `error: NONE`（此前必抛该 ReferenceError）。
 
-  return false;
-}
+## 🟠 次要修复（非致命，但拉低数据覆盖率）
 
-async function handleStatic(res, url) {
-  const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-  const safePath = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  const filePath = join(root, safePath);
-  try {
-    const body = await readFile(filePath);
-    res.writeHead(200, {
-      "Content-Type": mime[extname(filePath)] || "application/octet-stream",
-      "Cache-Control": "no-store"
-    });
-    res.end(body);
-  } catch {
-    const body = await readFile(join(root, "index.html"));
-    res.writeHead(200, { "Content-Type": mime[".html"], "Cache-Control": "no-store" });
-    res.end(body);
-  }
-}
+1. **Reuters RSS 404（feed 已下线）**
+   `reutersagency.com` 的 feed 已停用。替换为 Yahoo Finance / CNBC / Investing 三个备用商业新闻源，取第一个有内容的。
 
-createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname.startsWith("/api/")) {
-    await handleApi(req, res, url);
-    return;
-  }
-  await handleStatic(res, url);
-}).listen(port, "0.0.0.0", () => {
-  console.log(`Dashboard dev server running at http://127.0.0.1:${port}`);
-  console.log("For phone testing, use your Mac LAN IP, for example http://192.168.x.x:" + port);
-});
+2. **SEC EDGAR 403**
+   SEC 拒绝通用 User-Agent。`fetchText` 改为支持自定义 header，并给 SEC 请求加上合规的描述性 UA（含联系邮箱占位）。请把 `admin@example.com` 换成你自己的邮箱。
+
+## ⚠️ 已知遗留问题（本次未改，待定）
+
+- **Reddit 403 / SEC**：免费数据源被风控，已有 fallback 不影响主流程。
+- **TwelveData "no usable quotes"**：免费档对 NDX/VIX/DXY/XAU 等符号支持有限，已有 Yahoo Chart 兜底（指数实际走的是 Yahoo，状态 delayed，可用）。
+- **finnhubInsider `disabled_to_avoid_rate_limit`**：主动禁用以省额度，符合预期。
+
