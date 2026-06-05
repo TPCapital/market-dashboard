@@ -5,7 +5,7 @@ import RiskBiasMeter from "./components/RiskBiasMeter.jsx";
 import TradingMatrix from "./components/TradingMatrix.jsx";
 import OptionsSystem from "./components/OptionsSystem.jsx";
 
-const SNAPSHOT_ENDPOINT = "/api/snapshot";
+const SNAPSHOT_ENDPOINT = "/api/snapshot-cached";
 const REFRESH_MS = 60_000;
 
 function cn(...classes) {
