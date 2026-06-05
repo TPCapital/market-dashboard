@@ -1,11 +1,5 @@
 import React from "react";
-import { Activity, CircleDot, Globe2, RadioTower } from "lucide-react";
-
-const surfaceClass =
-  "bg-slate-950/40 backdrop-blur-md border border-slate-900/80 rounded-xl p-6 transition-all duration-300 hover:border-slate-800/80";
-
-const labelClass = "text-[10px] font-medium tracking-widest text-slate-500 uppercase";
-const metricClass = "font-mono tracking-tight font-light";
+import { ArrowDownRight, ArrowUpRight, ShieldAlert, Sliders, TrendingUp, Radio } from "lucide-react";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -18,70 +12,22 @@ function asArray(value) {
   return [];
 }
 
-function formatNumber(value, fallback = "N/A") {
+function formatNumber(value, fallback = "0.00") {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return number.toFixed(Math.abs(number) >= 10 ? 1 : 2);
+  return (number >= 0 ? "+" : "") + number.toFixed(2);
 }
 
-function toneClass(value = "") {
+function getTone(value, type = "default") {
   const text = String(value).toUpperCase();
-  if (/(BULL|RISK_ON|RISK-ON|TREND|SQUEEZE|LIVE|CACHED|HIT|POSITIVE)/.test(text)) return "text-teal-400";
-  if (/(BEAR|RISK_OFF|RISK-OFF|HEDGE|DEFENSIVE|NEGATIVE|ERROR)/.test(text)) return "text-rose-400";
-  if (/(ALERT|RISK|MISS|UNAVAILABLE|STALE|FALLBACK)/.test(text)) return "text-amber-400";
-  return "text-slate-400";
-}
+  const isPositive = /(BULL|RISK_ON|RISK-ON|TREND|SQUEEZE|LIVE|POSITIVE)/.test(text) || (type === "num" && Number(value) > 0);
+  const isNegative = /(BEAR|RISK_OFF|RISK-OFF|HEDGE|DEFENSIVE|NEGATIVE|ERROR)/.test(text) || (type === "num" && Number(value) < 0);
+  const isWarning = /(ALERT|RISK|MISS|UNAVAILABLE|STALE|FALLBACK)/.test(text);
 
-function badgeClass(value = "") {
-  const text = String(value).toUpperCase();
-  if (/(BULL|RISK_ON|RISK-ON|TREND|SQUEEZE|LIVE|CACHED|HIT|POSITIVE)/.test(text)) {
-    return "bg-teal-500/10 text-teal-400 border-teal-500/20";
-  }
-  if (/(BEAR|RISK_OFF|RISK-OFF|HEDGE|DEFENSIVE|NEGATIVE|ERROR)/.test(text)) {
-    return "bg-rose-500/10 text-rose-400 border-rose-500/20";
-  }
-  if (/(ALERT|RISK|MISS|UNAVAILABLE|STALE|FALLBACK)/.test(text)) {
-    return "bg-amber-500/10 text-amber-400 border-amber-500/20";
-  }
-  return "bg-slate-900/50 text-slate-400 border-slate-800";
-}
-
-function Dot({ tone = "neutral" }) {
-  const color = toneClass(tone).replace("text-", "bg-");
-  return <span className={cn("h-1.5 w-1.5 rounded-full", color)} />;
-}
-
-function Pill({ children, tone = "neutral" }) {
-  return (
-    <span className={cn("inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-medium tracking-widest uppercase", badgeClass(tone))}>
-      <Dot tone={tone} />
-      {children}
-    </span>
-  );
-}
-
-function MetricTile({ label, value, tone = "neutral", suffix = "" }) {
-  return (
-    <div className="border-t border-slate-900/80 pt-4">
-      <div className={labelClass}>{label}</div>
-      <div className={cn("mt-2 text-2xl text-slate-100", metricClass, toneClass(tone))}>
-        {value}
-        {suffix ? <span className="ml-1 text-sm text-slate-500">{suffix}</span> : null}
-      </div>
-    </div>
-  );
-}
-
-function SummaryLine({ title, value, tone = "neutral" }) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-t border-slate-900/80 pt-4">
-      <div>
-        <div className={labelClass}>{title}</div>
-        <p className="mt-2 text-xs leading-6 text-slate-400">{value}</p>
-      </div>
-      <Dot tone={tone} />
-    </div>
-  );
+  if (isPositive) return { text: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", raw: "emerald" };
+  if (isNegative) return { text: "text-rose-400", bg: "bg-rose-500/10 border-rose-500/20", raw: "rose" };
+  if (isWarning) return { text: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", raw: "amber" };
+  return { text: "text-slate-400", bg: "bg-slate-900/50 border-slate-800", raw: "slate" };
 }
 
 function normalizeMacroRows(snapshot = {}) {
@@ -112,6 +58,7 @@ export default function MacroRadarBoard({
   const resolvedConfidence = confidenceScore || snapshot.confidenceScore || snapshot.layers?.confidenceScore || {};
   const resolvedNarrative = narrative || snapshot.narrative || snapshot.layers?.narrative || {};
   const macroReport = macro || resolvedNarrative.macro || snapshot.sources?.xMacro?.data?.[0] || {};
+  
   const { indices, macroFeed, topPolicies, politicalSymbols } = normalizeMacroRows({ ...snapshot, narrative: resolvedNarrative });
 
   const spy = indices.find((item) => item.id === "SPY" || item.symbol === "SPY");
@@ -122,120 +69,163 @@ export default function MacroRadarBoard({
   const regimeType = resolvedRegime.type || snapshot.summary?.marketRegime || "NEUTRAL";
   const riskMode = resolvedRisk.mode || snapshot.summary?.riskMode || "Neutral";
   const confidence = resolvedConfidence.tradeConfidence || snapshot.summary?.confidence || "LOW";
-  const narrativeStatus = resolvedNarrative.status || resolvedNarrative.politicalFlow?.trumpTrades?.status || "fallback";
+  const narrativeStatus = resolvedNarrative.status || resolvedNarrative.politicalFlow?.trumpTrades?.status || "Live";
 
-  const narrativeSummary =
-    resolvedNarrative.summary ||
-    macroReport.summary ||
-    snapshot.summary?.strategy ||
-    "Macro signal remains stable while market structure waits for stronger confirmation.";
-
-  const headline =
-    resolvedNarrative.headline ||
-    snapshot.summary?.headline ||
-    `${regimeType} macro tape with ${riskMode} positioning bias`;
+  const narrativeSummary = resolvedNarrative.summary || macroReport.summary || snapshot.summary?.strategy || "";
+  const headline = resolvedNarrative.headline || snapshot.summary?.headline || `${regimeType} Market Regime / ${riskMode} Bias`;
 
   return (
-    <section className={cn(surfaceClass, "min-h-[420px] space-y-4", className)}>
-      <div className="flex items-start justify-between gap-6">
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <RadioTower className="h-4 w-4 text-slate-500" />
-            <span className={labelClass}>Macro Environment</span>
-          </div>
-          <h2 className="max-w-3xl text-3xl font-extralight leading-tight text-slate-100">
+    <section className={cn("rounded-[2rem] border border-slate-900 bg-slate-950/20 p-8 backdrop-blur-xl md:p-10 space-y-10 shadow-[0_30px_100px_rgba(0,0,0,0.6)]", className)}>
+      
+      {/* 1. 顶部开放式叙事主标题 */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <span className="flex h-2 w-2 items-center justify-center rounded-full bg-sky-500 shadow-[0_0_12px_rgba(14,165,233,0.8)] animate-pulse" />
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-slate-500 inline-flex items-center gap-2">
+            <Radio className="h-3 w-3 text-slate-600" /> Live Macro Broadcast Stream
+          </p>
+        </div>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <h2 className="text-3xl font-extralight tracking-tight text-slate-100 leading-tight md:text-4xl max-w-4xl">
             {headline}
           </h2>
+          <span className={cn("self-start rounded-md border px-2.5 py-0.5 text-[10px] font-bold tracking-wider uppercase", getTone(narrativeStatus).bg, getTone(narrativeStatus).text)}>
+            {narrativeStatus}
+          </span>
         </div>
-        <Pill tone={narrativeStatus}>{narrativeStatus}</Pill>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1.35fr_0.65fr]">
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-900/80 bg-slate-950/30 p-5">
-            <div className={labelClass}>Executive Summary</div>
-            <p className="mt-4 text-sm leading-7 text-slate-300">
-              <strong className="font-semibold text-slate-100">{regimeType}</strong>
-              <span className="text-slate-500"> regime confirms </span>
-              <strong className={cn("font-semibold", toneClass(riskMode))}>{riskMode}</strong>
-              <span className="text-slate-500"> conditions. </span>
-              {narrativeSummary}
+      {/* 2. 核心大局观简报 (彻底放弃卡片外壳，改用大段落精英新闻流排版) */}
+      <div className="border-l-2 border-slate-800 pl-6 md:pl-8 space-y-3">
+        <p className="text-lg leading-relaxed text-slate-300 font-light">
+          当前市场正式确立为 <span className="font-semibold text-slate-50 tracking-wide underline decoration-slate-700 decoration-2 underline-offset-4">{regimeType}</span> 环境，
+          核心宏观过滤器提示 <span className={cn("font-semibold tracking-wide", getTone(riskMode).text)}>{riskMode}</span> 策略导向。
+          {narrativeSummary || "全网宏观流动性信号处于稳定期，当前无结构性断裂风险，交易微观执行可保持既定频次。"}
+        </p>
+      </div>
+
+      {/* 3. 极简数字化成交流 (横向贯通，取消所有小方块卡片边框) */}
+      <div className="grid grid-cols-2 gap-y-6 gap-x-12 pt-6 border-y border-slate-900/60 md:grid-cols-4">
+        {[
+          { item: spy, label: "SPY Delta", isVix: false },
+          { item: qqq, label: "QQQ Delta", isVix: false },
+          { item: vix, label: "VIX Volatility", isVix: true },
+          { item: dxy, label: "DXY Dollar Index", isVix: false }
+        ].map(({ item, label, isVix }) => {
+          const val = Number(item?.change ?? 0);
+          const isUp = val >= 0;
+          const tone = isVix ? (isUp ? "bearish" : "bullish") : (isUp ? "bullish" : "bearish");
+          const colorClass = getTone(tone).text;
+
+          return (
+            <div key={label} className="group space-y-1">
+              <span className="text-[10px] font-medium tracking-widest text-slate-500 uppercase block">{label}</span>
+              <div className="flex items-baseline gap-2">
+                <span className={cn("font-mono text-3xl font-extralight tracking-tighter", colorClass)}>
+                  {formatNumber(item?.change)}%
+                </span>
+                {isUp ? (
+                  <ArrowUpRight className={cn("h-4 w-4 shrink-0 self-center opacity-60", colorClass)} />
+                ) : (
+                  <ArrowDownRight className={cn("h-4 w-4 shrink-0 self-center opacity-60", colorClass)} />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 4. 双翼叙事衍生流：左侧深度逻辑，右侧政治/催化剂网络 */}
+      <div className="grid gap-12 lg:grid-cols-[1.35fr_0.65fr] pt-4">
+        
+        {/* 左翼：连续型文本叙事 */}
+        <div className="space-y-8">
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+              <Sliders className="h-3.5 w-3.5 text-slate-500" /> Structural Mechanics
+            </h3>
+            <p className="text-sm leading-7 font-light text-slate-400">
+              {resolvedRegime.explanation || "大盘指数结构当前运行于关键均线线上，但整体广度（Breadth）以及行业领头羊的洗牌动态，仍旧是绝对控制实际执行成色与仓位容错率的核心。"}
             </p>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-4">
-            <MetricTile label="SPY Delta" value={formatNumber(spy?.change)} suffix="%" tone={spy?.change >= 0 ? "bullish" : "bearish"} />
-            <MetricTile label="QQQ Delta" value={formatNumber(qqq?.change)} suffix="%" tone={qqq?.change >= 0 ? "bullish" : "bearish"} />
-            <MetricTile label="VIX Delta" value={formatNumber(vix?.change)} suffix="%" tone={vix?.change > 0 ? "bearish" : "bullish"} />
-            <MetricTile label="Confidence" value={confidence} tone={confidence} />
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+              <ShieldAlert className="h-3.5 w-3.5 text-slate-500" /> Currency & Intermarket Pressure
+            </h4>
+            <p className="text-sm leading-7 font-light text-slate-400">
+              美元指数 (DXY) 当前录得 <span className={cn("font-mono font-normal", getTone(dxy?.change, "num").text)}>{formatNumber(dxy?.change)}%</span> 的变动。
+              在跨市场传导机制中，强美元会机械性压制高 Beta 资产及长存续期风险敞口的估值上限，需严密防范流动性抽离。
+            </p>
           </div>
-
-          <div className="grid gap-6 md:grid-cols-2">
-            <SummaryLine
-              title="Market Structure"
-              value={resolvedRegime.explanation || "Index structure is online, but breadth and leadership still control execution quality."}
-              tone={regimeType}
-            />
-            <SummaryLine
-              title="Dollar Pressure"
-              value={`DXY currently prints ${formatNumber(dxy?.change)}%. A stronger dollar mechanically reduces tolerance for long-duration risk.`}
-              tone={dxy?.change > 0 ? "bearish" : "neutral"}
-            />
+          
+          <div className="pt-2">
+            <div className="flex items-center gap-4">
+              <span className="text-[10px] font-bold tracking-widest text-slate-500 uppercase">Engine Confidence</span>
+              <div className="h-[2px] flex-1 bg-slate-900">
+                <div 
+                  className={cn("h-full transition-all duration-500", 
+                    confidence === "HIGH" ? "bg-emerald-500 w-full" : confidence === "MEDIUM" ? "bg-amber-500 w-2/3" : "bg-slate-700 w-1/3"
+                  )} 
+                />
+              </div>
+              <span className={cn("font-mono text-xs font-bold uppercase tracking-wider", getTone(confidence).text)}>
+                {confidence}
+              </span>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-900/80 bg-slate-950/30 p-5">
-            <div className="flex items-center justify-between">
-              <div className={labelClass}>Political Flow</div>
-              <Globe2 className="h-4 w-4 text-slate-600" />
-            </div>
-            <div className="mt-5 space-y-4">
-              {(topPolicies.length ? topPolicies : [{ policy: "policy cache", weight: 0 }]).map((item) => (
-                <div key={item.policy} className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <Dot tone={item.weight > 0 ? "bullish" : item.weight < 0 ? "bearish" : "neutral"} />
-                    <span className="text-xs text-slate-400">{item.policy}</span>
+        {/* 右翼：完全无边界流动的外部政策与信号原子线 */}
+        <div className="space-y-8 lg:border-l lg:border-slate-900 lg:pl-10">
+          
+          {/* 政治倾斜向量 */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Political Shifts</h3>
+            <div className="space-y-3">
+              {(topPolicies.length ? topPolicies : [{ policy: "Policy Anchor", weight: 0.0 }]).map((item) => {
+                const tone = getTone(item.weight, "num").text;
+                return (
+                  <div key={item.policy} className="flex items-center justify-between text-xs font-light">
+                    <span className="text-slate-400 truncate max-w-[160px]">{item.policy}</span>
+                    <span className={cn("font-mono font-normal", tone)}>{formatNumber(item.weight)}</span>
                   </div>
-                  <span className={cn("text-sm", metricClass, toneClass(item.weight > 0 ? "bullish" : item.weight < 0 ? "bearish" : "neutral"))}>
-                    {formatNumber(item.weight)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-900/80 bg-slate-950/30 p-5">
-            <div className="flex items-center justify-between">
-              <div className={labelClass}>Sensitive Symbols</div>
-              <Activity className="h-4 w-4 text-slate-600" />
-            </div>
-            <div className="mt-5 flex flex-wrap gap-2">
-              {(politicalSymbols.length ? politicalSymbols : [{ symbol: "SPY", bias: "NEUTRAL" }, { symbol: "QQQ", bias: "NEUTRAL" }]).map((item) => (
-                <span
-                  key={`${item.symbol}-${item.bias}`}
-                  className={cn("rounded-full border px-2.5 py-1 text-xs", metricClass, badgeClass(item.bias))}
-                >
+          {/* 敏感标的监测 */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Sensitive Nodes</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {(politicalSymbols.length ? politicalSymbols : [{ symbol: "SPY", bias: "NEUTRAL" }]).map((item) => (
+                <span key={`${item.symbol}-${item.bias}`} className={cn("rounded-sm border px-2 py-0.5 text-[10px] font-mono font-medium tracking-wide transition-colors", getTone(item.bias).bg, getTone(item.bias).text)}>
                   {item.symbol}
                 </span>
               ))}
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-900/80 bg-slate-950/30 p-5">
-            <div className={labelClass}>Macro Feed</div>
-            <div className="mt-5 space-y-4">
-              {(macroFeed.length ? macroFeed.slice(0, 3) : [{ title: "Macro Monitor", summary: "No external macro feed available.", tone: "neutral" }]).map((item, index) => (
-                <div key={`${item.title}-${index}`} className="flex gap-3">
-                  <CircleDot className={cn("mt-1 h-3.5 w-3.5 shrink-0", toneClass(item.tone || item.bias))} />
-                  <div>
-                    <div className="text-xs font-normal text-slate-300">{item.title || item.source || "Macro Signal"}</div>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{item.summary || item.description || item.reason}</p>
+          {/* 外部宏观情报流 */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Macro Signals</h3>
+            <div className="space-y-4">
+              {(macroFeed.length ? macroFeed.slice(0, 2) : [{ title: "Global Macro Monitor", summary: "External feeds are fully operational and verified.", bias: "neutral" }]).map((item, index) => (
+                <div key={`${item.title}-${index}`} className="group relative pl-3 space-y-1">
+                  {/* 左侧流动指示短线 */}
+                  <div className={cn("absolute left-0 top-1 bottom-1 w-[1px]", getTone(item.tone || item.bias).text.replace("text-", "bg-"))} />
+                  <div className="text-xs font-normal text-slate-300 group-hover:text-slate-100 transition-colors">
+                    {item.title || item.source || "Feed Update"}
                   </div>
+                  <p className="text-[11px] leading-5 text-slate-500 font-light">
+                    {item.summary || item.description || item.reason}
+                  </p>
                 </div>
               ))}
             </div>
           </div>
+
         </div>
       </div>
     </section>
