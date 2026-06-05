@@ -1,9 +1,9 @@
 window.DASHBOARD_CONFIG = {
   refreshSeconds: 300,
 
-  // Vercel Hobby-compatible architecture: snapshot is the only public API.
+  // Vercel Hobby-compatible architecture: snapshot is served through SWR cache wrapper.
   endpoints: {
-    snapshot: "/api/snapshot",
+    snapshot: "/api/snapshot-cached",
     dailyReport: "/api/daily-report",
     health: "/api/health",
     tradeDecision: "/api/trade-decision"
