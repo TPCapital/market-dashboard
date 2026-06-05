@@ -1,4 +1,4 @@
-import { buildSnapshot } from "./snapshot.js";
+import { buildSnapshot } from "./_lib/engines/snapshot-engine.js";
 import { CACHE_TTL, fetchWithSWR } from "./_lib/cache.js";
 
 function json(res, status, payload) {
