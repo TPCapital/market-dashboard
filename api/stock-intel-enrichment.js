@@ -35,8 +35,10 @@ export default async function handler(req, res) {
   if (req.method !== "GET") return noStoreJson(res, 405, { status: "error", error: "method_not_allowed", generatedAt: Date.now(), tickers: {} });
   try {
     const payload = await buildAutoIntel(req.query?.tickers || "");
-    if (String(req.query?.__auto_intel || "") === "1") return noStoreJson(res, 200, payload);
-    return noStoreJson(res, 200, legacyCompat(payload));
+    const isAutoIntelRewrite = req.query?.__auto_intel === "1" || String(req.url || "").includes("__auto_intel=1");
+    const isLegacyEnrichment = String(req.url || "").includes("/api/stock-intel-enrichment") && !isAutoIntelRewrite;
+    if (isLegacyEnrichment) return noStoreJson(res, 200, legacyCompat(payload));
+    return noStoreJson(res, 200, payload);
   } catch (error) {
     return noStoreJson(res, 200, {
       status: "fallback",
