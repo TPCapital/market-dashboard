@@ -25,7 +25,9 @@ export default async function handler(req, res) {
   const body = await readBody(req);
   const result = await routeAI({
     prompt: String(body.prompt || ""),
+    context: String(body.context || body.prompt || ""),
     question: String(body.question || ""),
+    mode: String(body.mode || "analysis"),
     lang: body.lang === "en" ? "en" : "zh",
     force: Boolean(body.force)
   });
