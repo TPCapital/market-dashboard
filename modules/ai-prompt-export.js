@@ -198,7 +198,7 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     });
   }
 
-  function renderGeminiResult(result, lang, prompt) {
+  function renderGeminiResult(result, lang, prompt, title = "Gemini Auto Analysis") {
     document.getElementById("apeGeminiOutput")?.remove();
     const status = result?.status || "unavailable";
     const source = result?.source || "Gemini API";
@@ -210,7 +210,7 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     const outputHtml = `
 <div class="ape-output ape-gemini-output" id="apeGeminiOutput">
   <div class="ape-output-header">
-    <span class="ape-output-label">Gemini Auto Analysis · ${escHtml(status)}</span>
+    <span class="ape-output-label">${escHtml(title)} · ${escHtml(status)}</span>
     <button class="ape-copy-btn" id="apeCopyGeminiBtn">📋 复制分析 Copy</button>
   </div>
   <p class="ape-note">${escHtml(source)} · ${escHtml(latency)}${error ? " · " + escHtml(error) : ""}</p>
@@ -267,6 +267,78 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     }
   }
 
+  function buildQuestionPrompt(question, lang) {
+    const context = buildCurrentPrompt(lang);
+    return [
+      "=== SPECULARIS WEB AI Q&A ===",
+      "User question:",
+      question,
+      "",
+      "Current dashboard context:",
+      context,
+      "",
+      "Instructions:",
+      "1. Answer the user's question directly in Chinese unless the user asks for English.",
+      "2. Use only the dashboard context and visible market data. Do not invent missing flow, GEX, insider, or options-chain data.",
+      "3. Separate conclusion, reasons, risk points, and data that still needs confirmation.",
+      "4. If the data is stale, delayed, unavailable, or mixed, say so clearly and keep the answer conservative.",
+      "5. Research only. This is not financial advice."
+    ].join("\n");
+  }
+
+  async function runGeminiQuestion(lang = "zh") {
+    const input = document.getElementById("apeQuestionInput");
+    const btn = document.getElementById("apeBtnAskGemini");
+    const question = (input?.value || "").trim();
+    const idle = btn?.textContent || "";
+
+    if (!question) {
+      renderGeminiResult({
+        status: "unavailable",
+        source: "Web AI Q&A",
+        error: "missing_question",
+        analysis: "请先在网页内输入你要分析的问题。"
+      }, lang, buildCurrentPrompt(lang), "Gemini Web Q&A");
+      input?.focus();
+      return;
+    }
+
+    const prompt = buildQuestionPrompt(question, lang);
+    removeOutputs();
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Gemini analyzing...";
+    }
+    try {
+      const response = await fetch("/api/ai-prompt-generate", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang, prompt, question })
+      });
+      let result = null;
+      try { result = await response.json(); } catch { result = null; }
+      renderGeminiResult(result || {
+        status: "unavailable",
+        source: "Gemini API",
+        error: `http_${response.status}`,
+        analysis: "网页内 Gemini 问答请求失败。"
+      }, lang, prompt, "Gemini Web Q&A");
+    } catch (error) {
+      renderGeminiResult({
+        status: "unavailable",
+        source: "Gemini API",
+        error: error?.message || "request_failed",
+        analysis: "网页内 Gemini 问答请求失败。请检查 Vercel Function logs 或 Gemini 配额状态。"
+      }, lang, prompt, "Gemini Web Q&A");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = idle;
+      }
+    }
+  }
+
   container.classList.remove("is-loading");
   container.innerHTML = `
 <div class="ape-panel">
@@ -281,6 +353,18 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     </div>
   </div>
   ${getGeminiSummaryHtml()}
+  <div class="ape-output" id="apeQuestionPanel">
+    <div class="ape-output-header">
+      <span class="ape-output-label">Web AI Q&amp;A / 网页内问答</span>
+      <span class="ape-note">Gemini API · /api/ai-prompt-generate</span>
+    </div>
+    <textarea class="ape-textarea" id="apeQuestionInput" rows="4" placeholder="输入你的问题，例如：今天 AMD 和 NVDA 哪个更适合做 0DTE？风险点是什么？"></textarea>
+    <div class="ape-btn-row">
+      <button class="ape-gen-btn" id="apeBtnAskGemini">💬 网页内提问 Gemini</button>
+      <button class="ape-copy-btn" id="apeClearQuestionBtn">清空</button>
+    </div>
+    <p class="ape-note">输入问题后，页面会自动携带当前快照、个股情报、期权信号和评分上下文调用 Gemini。</p>
+  </div>
   <div class="ape-btn-row">
     <button class="ape-gen-btn" id="apeBtnGeminiZh">✨ Gemini 自动分析</button>
     <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnGeminiEn">✨ Gemini English Analysis</button>
@@ -317,6 +401,14 @@ export function renderAIPromptExport(containerId, getModuleStates) {
 
   document.getElementById("apeBtnGeminiZh").addEventListener("click", () => runGeminiAutoAnalysis("zh"));
   document.getElementById("apeBtnGeminiEn").addEventListener("click", () => runGeminiAutoAnalysis("en"));
+  document.getElementById("apeBtnAskGemini").addEventListener("click", () => runGeminiQuestion("zh"));
+  document.getElementById("apeClearQuestionBtn").addEventListener("click", () => {
+    const input = document.getElementById("apeQuestionInput");
+    if (input) {
+      input.value = "";
+      input.focus();
+    }
+  });
   document.getElementById("apeBtnZh").addEventListener("click", () => generateAndShow("zh"));
   document.getElementById("apeBtnEn").addEventListener("click", () => generateAndShow("en"));
 
