@@ -1,7 +1,6 @@
 // modules/ai-prompt-export.js
 // Specularis Market Terminal Lite — AI Prompt Export Module.
-// Generates copyable analysis prompts for GPT Plus / Claude Pro.
-// No API calls made. Human-in-the-loop workflow.
+// Supports both copyable GPT / Claude prompts and Gemini automatic analysis.
 
 function escHtml(v) {
   return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -144,14 +143,43 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     latestDecisions = e.detail?.decisions || [];
   });
 
-  function generateAndShow(lang) {
+  function buildCurrentPrompt(lang) {
     const { sipState, oilState, kolState, marketRegime } = getModuleStates();
-    const prompt = buildPrompt(lang, {
+    return buildPrompt(lang, {
       sipState, oilState, kolState, marketRegime, decisions: latestDecisions
     });
+  }
 
-    const existing = document.getElementById("apePromptOutput");
-    if (existing) existing.remove();
+  function copyText(text, btn, idleText) {
+    const write = navigator.clipboard?.writeText
+      ? navigator.clipboard.writeText(text)
+      : Promise.reject(new Error("clipboard_unavailable"));
+    write.then(() => {
+      if (btn) {
+        btn.textContent = "✅ 已复制！Copied!";
+        setTimeout(() => { btn.textContent = idleText; }, 2000);
+      }
+    }).catch(() => {
+      const fallback = document.createElement("textarea");
+      fallback.value = text;
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      fallback.remove();
+    });
+  }
+
+  function removeOutputs() {
+    document.getElementById("apePromptOutput")?.remove();
+    document.getElementById("apeGeminiOutput")?.remove();
+  }
+
+  function generateAndShow(lang) {
+    const prompt = buildCurrentPrompt(lang);
+
+    removeOutputs();
 
     const outputHtml = `
 <div class="ape-output" id="apePromptOutput">
@@ -166,14 +194,77 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     container.insertAdjacentHTML("beforeend", outputHtml);
 
     document.getElementById("apeCopyBtn").addEventListener("click", () => {
-      navigator.clipboard.writeText(prompt).then(() => {
-        const btn = document.getElementById("apeCopyBtn");
-        if (btn) { btn.textContent = "✅ 已复制！Copied!"; setTimeout(() => { btn.textContent = "📋 复制 Copy"; }, 2000); }
-      }).catch(() => {
-        document.getElementById("apePromptText")?.select();
-        document.execCommand("copy");
-      });
+      copyText(prompt, document.getElementById("apeCopyBtn"), "📋 复制 Copy");
     });
+  }
+
+  function renderGeminiResult(result, lang, prompt) {
+    document.getElementById("apeGeminiOutput")?.remove();
+    const status = result?.status || "unavailable";
+    const source = result?.source || "Gemini API";
+    const error = result?.error || "";
+    const latency = Number.isFinite(result?.latencyMs) ? `${result.latencyMs}ms` : "--";
+    const analysis = result?.analysis || (lang === "en"
+      ? "No Gemini analysis returned. The generated prompt is preserved below."
+      : "Gemini 未返回分析结果。下方保留本次生成的提示词。");
+    const outputHtml = `
+<div class="ape-output ape-gemini-output" id="apeGeminiOutput">
+  <div class="ape-output-header">
+    <span class="ape-output-label">Gemini Auto Analysis · ${escHtml(status)}</span>
+    <button class="ape-copy-btn" id="apeCopyGeminiBtn">📋 复制分析 Copy</button>
+  </div>
+  <p class="ape-note">${escHtml(source)} · ${escHtml(latency)}${error ? " · " + escHtml(error) : ""}</p>
+  <textarea class="ape-textarea ape-textarea--analysis" id="apeGeminiText" readonly>${escHtml(analysis)}</textarea>
+  <details class="ape-note">
+    <summary>查看本次发送给 Gemini 的提示词</summary>
+    <textarea class="ape-textarea" readonly>${escHtml(prompt)}</textarea>
+  </details>
+</div>`;
+    container.insertAdjacentHTML("beforeend", outputHtml);
+    document.getElementById("apeCopyGeminiBtn")?.addEventListener("click", () => {
+      copyText(analysis, document.getElementById("apeCopyGeminiBtn"), "📋 复制分析 Copy");
+    });
+  }
+
+  async function runGeminiAutoAnalysis(lang) {
+    const btn = document.getElementById(lang === "en" ? "apeBtnGeminiEn" : "apeBtnGeminiZh");
+    const idle = btn?.textContent || "";
+    const prompt = buildCurrentPrompt(lang);
+    removeOutputs();
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = lang === "en" ? "⏳ Gemini analyzing..." : "⏳ Gemini 分析中...";
+    }
+    try {
+      const response = await fetch("/api/ai-prompt-generate", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang, prompt })
+      });
+      let result = null;
+      try { result = await response.json(); } catch { result = null; }
+      renderGeminiResult(result || {
+        status: "unavailable",
+        source: "Gemini API",
+        error: `http_${response.status}`,
+        analysis: lang === "en" ? "Gemini automatic analysis failed." : "Gemini 自动分析失败。"
+      }, lang, prompt);
+    } catch (error) {
+      renderGeminiResult({
+        status: "unavailable",
+        source: "Gemini API",
+        error: error?.message || "request_failed",
+        analysis: lang === "en"
+          ? "Gemini automatic analysis failed. You can still copy the generated prompt and analyze it manually."
+          : "Gemini 自动分析失败。你仍然可以复制生成的提示词进行手动分析。"
+      }, lang, prompt);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = idle;
+      }
+    }
   }
 
   container.classList.remove("is-loading");
@@ -185,11 +276,15 @@ export function renderAIPromptExport(containerId, getModuleStates) {
       <h3 class="ape-title">生成 GPT / Claude 分析提示词</h3>
       <p class="ape-desc">
         将当前市场快照 + 个股情报 + 期权信号 + KOL 数据 + AI 评分汇总为可粘贴的分析提示词。
-        无需付费 API — 粘贴至 GPT Plus 或 Claude Pro 完成分析。
+        可手动复制到 GPT / Claude，也可直接调用 Gemini 生成网页内自动分析。
       </p>
     </div>
   </div>
   ${getGeminiSummaryHtml()}
+  <div class="ape-btn-row">
+    <button class="ape-gen-btn" id="apeBtnGeminiZh">✨ Gemini 自动分析</button>
+    <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnGeminiEn">✨ Gemini English Analysis</button>
+  </div>
   <div class="ape-btn-row">
     <button class="ape-gen-btn" id="apeBtnZh">🇨🇳 生成中文提示词</button>
     <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnEn">🇺🇸 Generate English Prompt</button>
@@ -202,12 +297,12 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     <div class="ape-step-arrow">→</div>
     <div class="ape-step">
       <span class="ape-step-num">2</span>
-      <span>点击「生成提示词」按钮</span>
+      <span>点击「Gemini 自动分析」或生成提示词</span>
     </div>
     <div class="ape-step-arrow">→</div>
     <div class="ape-step">
       <span class="ape-step-num">3</span>
-      <span>粘贴至 GPT Plus / Claude Pro</span>
+      <span>网页内查看自动分析，或手动粘贴至 GPT / Claude</span>
     </div>
     <div class="ape-step-arrow">→</div>
     <div class="ape-step">
@@ -216,11 +311,12 @@ export function renderAIPromptExport(containerId, getModuleStates) {
     </div>
   </div>
   <p class="ape-api-note">
-    💡 Future upgrade: 接入 OpenAI / Anthropic API 后，此模块可直接调用 AI 完成分析。
-    占位符已预留 API 配置接口。
+    💡 Gemini 自动分析使用 /api/ai-prompt-generate。若 API 配额受限，仍可使用手动复制提示词流程。
   </p>
 </div>`;
 
+  document.getElementById("apeBtnGeminiZh").addEventListener("click", () => runGeminiAutoAnalysis("zh"));
+  document.getElementById("apeBtnGeminiEn").addEventListener("click", () => runGeminiAutoAnalysis("en"));
   document.getElementById("apeBtnZh").addEventListener("click", () => generateAndShow("zh"));
   document.getElementById("apeBtnEn").addEventListener("click", () => generateAndShow("en"));
 
