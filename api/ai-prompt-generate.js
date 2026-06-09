@@ -9,4 +9,4 @@ function envValue(name) {
 
 function noStoreJson(res, status, data) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store, max-age=0
+  res.setHeader("Cache-Control",
