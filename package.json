@@ -7,5 +7,4 @@
     "node": "20.x"
   },
   "scripts": {
-    "build": "node -e \"console.log('Static dashboard — no build step required. Vercel deploys outputDirectory: . directly.')\"",
-    "
+    "build": "node -e \"console.log('Static dashboard — no build step required. Vercel deploys outputDirectory: .
