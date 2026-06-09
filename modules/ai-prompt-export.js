@@ -282,6 +282,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
 
   function removeOutputs() {
     document.getElementById("apePromptOutput")?.remove();
+    document.getElementById("apeManualPromptOutput")?.remove();
     document.getElementById("apeGeminiOutput")?.remove();
   }
 
@@ -332,7 +333,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     const prompt = buildCurrentPrompt(lang);
     removeOutputs();
     const outputHtml = `
-<div class="ape-output" id="apePromptOutput">
+<div class="ape-output" id="apeManualPromptOutput">
   <div class="ape-output-header">
     <span class="ape-output-label">Generated Prompt - ${lang === "en" ? "English" : "中文"}</span>
     <button class="ape-copy-btn" id="apeCopyBtn">复制 Copy</button>
