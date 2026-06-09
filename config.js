@@ -42,3 +42,12 @@ window.DASHBOARD_CONFIG = {
     "CSCO"
   ]
 };
+
+(() => {
+  if (window.__specularisAutoIntelV15Loader) return;
+  window.__specularisAutoIntelV15Loader = true;
+  const script = document.createElement("script");
+  script.type = "module";
+  script.src = "./modules/auto-intel-v15.js";
+  document.head.appendChild(script);
+})();
