@@ -1,5 +1,5 @@
 // modules/ai-prompt-export.js
-// Specularis Market Terminal Lite v1.4.3 - AI Prompt Export + guarded Gemini Q&A.
+// Specularis Market Terminal Lite v1.4.3 - AI Prompt Export + guarded AI Router Q&A.
 
 const TICKERS = ["MU", "MRVL", "NVDA", "AVGO", "AMD", "TSM", "ASML", "PLTR", "ORCL", "SMCI"];
 const GEMINI_LOCAL_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -36,6 +36,11 @@ function trendZh(v) {
     placeholder: "等待数据",
     unavailable: "等待数据",
   }[v] || v || "等待数据";
+}
+
+function displayAiSource(value) {
+  const raw = String(value || "AI Router");
+  return /gemini/i.test(raw) ? "AI Router" : raw;
 }
 
 function buildPrompt(lang, { sipState, oilState, kolState, marketRegime, decisions }) {
@@ -143,14 +148,14 @@ function getGeminiSummaryHtml() {
   if (!gemini) return "";
   const status = gemini.status || gemini.dataStatus || "unavailable";
   const summary = gemini.summary || {};
-  const zh = summary.zhSummary || summary.rawText || "Gemini AI 摘要暂不可用。";
+  const zh = summary.zhSummary || summary.rawText || "AI 分析摘要暂不可用。";
   const risks = Array.isArray(summary.topRisks) ? summary.topRisks.slice(0, 3).join(" / ") : "";
   const focus = Array.isArray(summary.watchlistFocus) ? summary.watchlistFocus.slice(0, 5).join(" / ") : "";
-  const source = gemini.source || "Gemini API";
+  const source = displayAiSource(gemini.source);
   return `
   <div class="ape-gemini-card">
     <div class="ape-output-header">
-      <span class="ape-output-label">Gemini AI Summary · ${escHtml(status)}</span>
+      <span class="ape-output-label">AI 分析摘要 · ${escHtml(status)}</span>
       <span class="ape-note">${escHtml(source)}</span>
     </div>
     <p class="ape-desc">${escHtml(zh)}</p>
@@ -240,7 +245,7 @@ export function renderAIPromptExport(containerId, getModuleStates) {
       : "请用中文直接回答。包含：结论、理由、风险、不可交易条件、仍需确认的数据。仅供研究，不构成投资建议。";
 
     return `
-=== SPECULARIS COMPACT GEMINI CONTEXT v1.4.3 ===
+=== SPECULARIS COMPACT AI ROUTER CONTEXT v1.4.3 ===
 MARKET REGIME:
 mode=${regime.mode || regime.type || "N/A"} label=${regime.label || regime.headline || "N/A"} score=${fmt(regime.score, "--")} conclusion=${regime.conclusion || "N/A"}
 
@@ -250,7 +255,7 @@ ${topDecisionLines}
 WATCHLIST ONE-LINE SNAPSHOT:
 ${stockLines}
 
-EXISTING GEMINI SUMMARY:
+EXISTING AI ANALYSIS SUMMARY:
 ${geminiText ? geminiText.slice(0, 900) : "N/A"}
 ${questionBlock}
 INSTRUCTIONS:
@@ -297,9 +302,9 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
 
   function restoreGeminiButtons() {
     const labels = {
-      apeBtnGeminiZh: "Gemini 自动分析",
-      apeBtnGeminiEn: "Gemini English Analysis",
-      apeBtnAskGemini: "网页内提问 Gemini",
+      apeBtnGeminiZh: "AI Router 自动分析",
+      apeBtnGeminiEn: "AI Router English Analysis",
+      apeBtnAskGemini: "网页内 AI 分析",
       apeRegenerateGeminiBtn: "重新生成",
     };
     Object.entries(labels).forEach(([id, label]) => {
@@ -339,7 +344,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     <button class="ape-copy-btn" id="apeCopyBtn">复制 Copy</button>
   </div>
   <textarea class="ape-textarea" id="apePromptText" readonly>${escHtml(prompt)}</textarea>
-  <p class="ape-note">可手动复制到 GPT Plus / Claude Pro / Gemini。Gemini 自动分析会使用更短的 compact prompt，避免触发 rate limit。</p>
+  <p class="ape-note">可手动复制到 GPT Plus / Claude Pro 等工具。AI Router 自动分析会使用更短的 compact prompt，避免触发 rate limit。</p>
 </div>`;
     container.insertAdjacentHTML("beforeend", outputHtml);
     document.getElementById("apeCopyBtn").addEventListener("click", () => {
@@ -347,15 +352,15 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     });
   }
 
-  function renderGeminiResult(result, lang, prompt, title = "Gemini Auto Analysis", options = {}) {
+  function renderGeminiResult(result, lang, prompt, title = "AI Router Auto Analysis", options = {}) {
     document.getElementById("apeGeminiOutput")?.remove();
     const status = result?.status || "unavailable";
-    const source = options.localCache ? "Loaded from local cache" : (result?.source || "Gemini API");
+    const source = options.localCache ? "Loaded from local cache" : displayAiSource(result?.source);
     const error = result?.error || "";
     const latency = Number.isFinite(result?.latencyMs) ? `${result.latencyMs}ms` : "--";
     const analysis = result?.analysis || (lang === "en"
-      ? "No Gemini analysis returned. The generated prompt is preserved below."
-      : "Gemini 未返回分析结果。下方保留本次生成的提示词。");
+      ? "No AI Router analysis returned. The generated prompt is preserved below."
+      : "AI Router 未返回分析结果。下方保留本次生成的提示词。");
     const outputHtml = `
 <div class="ape-output ape-gemini-output" id="apeGeminiOutput">
   <div class="ape-output-header">
@@ -366,10 +371,10 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
   <p class="ape-note">${escHtml(source)} · ${escHtml(latency)}${result?.cacheHit ? " · server cache" : ""}${options.localCache ? " · local cache" : ""}${error ? " · " + escHtml(error) : ""}</p>
   <textarea class="ape-textarea ape-textarea--analysis" id="apeGeminiText" readonly>${escHtml(analysis)}</textarea>
   <details class="ape-note">
-    <summary>查看本次发送给 Gemini 的 compact prompt</summary>
+    <summary>查看本次发送给 AI Router 的 compact prompt</summary>
     <textarea class="ape-textarea" readonly>${escHtml(prompt)}</textarea>
   </details>
-  <p class="ape-note">如果 Gemini 额度受限，可继续使用“生成中文提示词 / Generate English Prompt”手动复制到 GPT Plus 或 Claude Pro。</p>
+  <p class="ape-note">如果 AI Router 暂时受限，可继续使用“生成中文提示词 / Generate English Prompt”手动复制到 GPT Plus 或 Claude Pro。</p>
 </div>`;
     container.insertAdjacentHTML("beforeend", outputHtml);
     document.getElementById("apeCopyGeminiBtn")?.addEventListener("click", () => {
@@ -392,7 +397,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     }
 
     removeOutputs();
-    setGeminiButtonsDisabled(true, lang === "en" ? "Gemini analyzing..." : "Gemini 分析中...");
+    setGeminiButtonsDisabled(true, lang === "en" ? "AI Router analyzing..." : "AI Router 分析中...");
     try {
       const response = await fetch("/api/ai-prompt-generate", {
         method: "POST",
@@ -404,9 +409,9 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
       try { result = await response.json(); } catch { result = null; }
       result = result || {
         status: "unavailable",
-        source: "Gemini API",
+        source: "AI Router",
         error: `http_${response.status}`,
-        analysis: lang === "en" ? "Gemini automatic analysis failed." : "Gemini 自动分析失败。"
+        analysis: lang === "en" ? "AI Router automatic analysis failed." : "AI Router 自动分析失败。"
       };
       if (result.status === "live") setLocalGeminiCache(promptHash, result);
       renderGeminiResult(result, lang, prompt, title);
@@ -415,11 +420,11 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     } catch (error) {
       renderGeminiResult({
         status: "unavailable",
-        source: "Gemini API",
+        source: "AI Router",
         error: error?.message || "request_failed",
         analysis: lang === "en"
-          ? "Gemini automatic analysis failed. You can still copy the generated prompt and analyze it manually."
-          : "Gemini 自动分析失败。你仍然可以复制生成的提示词进行手动分析。"
+          ? "AI Router automatic analysis failed. You can still copy the generated prompt and analyze it manually."
+          : "AI Router 自动分析失败。你仍然可以复制生成的提示词进行手动分析。"
       }, lang, prompt, title);
       restoreGeminiButtons();
     }
@@ -427,7 +432,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
 
   function runGeminiAutoAnalysis(lang) {
     const prompt = buildCompactPrompt(lang);
-    return executeGeminiRequest({ lang, prompt, title: "Gemini Auto Analysis" });
+    return executeGeminiRequest({ lang, prompt, title: "AI Router Auto Analysis" });
   }
 
   function runGeminiQuestion(lang = "zh") {
@@ -439,12 +444,12 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
         source: "Web AI Q&A",
         error: "missing_question",
         analysis: "请先在网页内输入你要分析的问题。"
-      }, lang, buildCompactPrompt(lang), "Gemini Web Q&A");
+      }, lang, buildCompactPrompt(lang), "AI Router Web Q&A");
       input?.focus();
       return;
     }
     const prompt = buildCompactPrompt(lang, question);
-    return executeGeminiRequest({ lang, prompt, title: "Gemini Web Q&A" });
+    return executeGeminiRequest({ lang, prompt, title: "AI Router Web Q&A" });
   }
 
   container.classList.remove("is-loading");
@@ -455,7 +460,7 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
       <span class="ape-badge">Human-in-the-Loop AI Workflow</span>
       <h3 class="ape-title">网页端 AI 问答 / Prompt Export</h3>
       <p class="ape-desc">
-        网页内 Gemini 分析使用短上下文 compact prompt，并带缓存与冷却保护；手动复制流程仍保留完整提示词。
+        网页内 AI 分析使用短上下文 compact prompt，并带缓存与冷却保护；手动复制流程仍保留完整提示词。
       </p>
     </div>
   </div>
@@ -463,18 +468,18 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
   <div class="ape-output" id="apeQuestionPanel">
     <div class="ape-output-header">
       <span class="ape-output-label">Web AI Q&amp;A / 网页内问答</span>
-      <span class="ape-note">Gemini API · guarded</span>
+      <span class="ape-note">AI Router · guarded</span>
     </div>
     <textarea class="ape-textarea" id="apeQuestionInput" rows="4" placeholder="输入你的问题，例如：今天 AMD 和 NVDA 哪个更适合做 0DTE？风险点是什么？"></textarea>
     <div class="ape-btn-row">
-      <button class="ape-gen-btn" id="apeBtnAskGemini">网页内提问 Gemini</button>
+      <button class="ape-gen-btn" id="apeBtnAskGemini">网页内 AI 分析</button>
       <button class="ape-copy-btn" id="apeClearQuestionBtn">清空</button>
     </div>
-    <p class="ape-note">点击后才调用 Gemini；命中本地缓存时不会请求后端。</p>
+    <p class="ape-note">点击后才调用 AI Router；命中本地缓存时不会请求后端。</p>
   </div>
   <div class="ape-btn-row">
-    <button class="ape-gen-btn" id="apeBtnGeminiZh">Gemini 自动分析</button>
-    <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnGeminiEn">Gemini English Analysis</button>
+    <button class="ape-gen-btn" id="apeBtnGeminiZh">AI Router 自动分析</button>
+    <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnGeminiEn">AI Router English Analysis</button>
   </div>
   <div class="ape-btn-row">
     <button class="ape-gen-btn" id="apeBtnZh">生成中文提示词</button>
@@ -483,14 +488,14 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
   <div class="ape-workflow">
     <div class="ape-step"><span class="ape-step-num">1</span><span>网页输入问题或点击自动分析</span></div>
     <div class="ape-step-arrow">→</div>
-    <div class="ape-step"><span class="ape-step-num">2</span><span>优先读取本地缓存；未命中才请求 Gemini</span></div>
+    <div class="ape-step"><span class="ape-step-num">2</span><span>优先读取本地缓存；未命中才请求 AI Router</span></div>
     <div class="ape-step-arrow">→</div>
     <div class="ape-step"><span class="ape-step-num">3</span><span>遇到 429 自动进入冷却倒计时</span></div>
     <div class="ape-step-arrow">→</div>
     <div class="ape-step"><span class="ape-step-num">4</span><span>失败时仍可复制完整提示词手动分析</span></div>
   </div>
   <p class="ape-api-note">
-    Gemini 自动分析使用 /api/ai-prompt-generate。若 API 配额受限，请等待冷却结束，或手动复制提示词到 GPT Plus / Claude Pro。
+    AI Router 自动分析使用 /api/ai-prompt-generate。若 API 配额受限，请等待冷却结束，或手动复制提示词到 GPT Plus / Claude Pro。
   </p>
 </div>`;
 
