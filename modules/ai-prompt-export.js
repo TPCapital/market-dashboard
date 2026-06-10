@@ -1,5 +1,5 @@
 // modules/ai-prompt-export.js
-// Specularis Market Terminal Lite v1.4.3 - AI Prompt Export + guarded AI Router Q&A.
+// Specularis Market Terminal Lite v1.4.3 - AI Prompt Export + AI Router Q&A.
 
 const TICKERS = ["MU", "MRVL", "NVDA", "AVGO", "AMD", "TSM", "ASML", "PLTR", "ORCL", "SMCI"];
 const GEMINI_LOCAL_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -468,14 +468,12 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
   <div class="ape-output" id="apeQuestionPanel">
     <div class="ape-output-header">
       <span class="ape-output-label">Web AI Q&amp;A / 网页内问答</span>
-      <span class="ape-note">AI Router · guarded</span>
     </div>
     <textarea class="ape-textarea" id="apeQuestionInput" rows="4" placeholder="输入你的问题，例如：今天 AMD 和 NVDA 哪个更适合做 0DTE？风险点是什么？"></textarea>
     <div class="ape-btn-row">
       <button class="ape-gen-btn" id="apeBtnAskGemini">网页内 AI 分析</button>
       <button class="ape-copy-btn" id="apeClearQuestionBtn">清空</button>
     </div>
-    <p class="ape-note">点击后才调用 AI Router；命中本地缓存时不会请求后端。</p>
   </div>
   <div class="ape-btn-row">
     <button class="ape-gen-btn" id="apeBtnGeminiZh">AI Router 自动分析</button>
@@ -485,18 +483,6 @@ Do not fabricate GEX, options flow, insider data, or unavailable IV. If data is 
     <button class="ape-gen-btn" id="apeBtnZh">生成中文提示词</button>
     <button class="ape-gen-btn ape-gen-btn--en" id="apeBtnEn">Generate English Prompt</button>
   </div>
-  <div class="ape-workflow">
-    <div class="ape-step"><span class="ape-step-num">1</span><span>网页输入问题或点击自动分析</span></div>
-    <div class="ape-step-arrow">→</div>
-    <div class="ape-step"><span class="ape-step-num">2</span><span>优先读取本地缓存；未命中才请求 AI Router</span></div>
-    <div class="ape-step-arrow">→</div>
-    <div class="ape-step"><span class="ape-step-num">3</span><span>遇到 429 自动进入冷却倒计时</span></div>
-    <div class="ape-step-arrow">→</div>
-    <div class="ape-step"><span class="ape-step-num">4</span><span>失败时仍可复制完整提示词手动分析</span></div>
-  </div>
-  <p class="ape-api-note">
-    AI Router 自动分析使用 /api/ai-prompt-generate。若 API 配额受限，请等待冷却结束，或手动复制提示词到 GPT Plus / Claude Pro。
-  </p>
 </div>`;
 
   document.getElementById("apeBtnGeminiZh").addEventListener("click", () => runGeminiAutoAnalysis("zh"));
